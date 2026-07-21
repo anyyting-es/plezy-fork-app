@@ -1,0 +1,255 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
+import 'package:plezy/widgets/app_icon.dart';
+import 'package:material_symbols_icons/symbols.dart';
+import 'package:flutter/services.dart';
+
+import '../../../focus/dpad_navigator.dart';
+import '../../../focus/key_event_utils.dart';
+import '../../../mpv/mpv.dart';
+import '../../../services/settings_service.dart';
+import '../../../i18n/strings.g.dart';
+import '../../../focus/focusable_wrapper.dart';
+
+/// A volume control widget that displays a mute/unmute button and volume slider.
+///
+/// This widget integrates with [Player] to control volume and persists
+/// the volume setting using [SettingsService].
+///
+/// When using keyboard/D-pad navigation, pressing Select enters "adjust mode"
+/// where left/right arrows adjust volume instead of navigating.
+class VolumeControl extends StatefulWidget {
+  final Player player;
+
+  /// Optional FocusNode for D-pad/keyboard navigation.
+  final FocusNode? focusNode;
+
+  /// Custom key event handler for focus navigation (used when NOT in adjust mode).
+  final KeyEventResult Function(FocusNode, KeyEvent)? onKeyEvent;
+
+  /// Called when focus changes.
+  final ValueChanged<bool>? onFocusChange;
+
+  /// Called on any keyboard activity (to reset hide timer).
+  final VoidCallback? onFocusActivity;
+
+  const VolumeControl({
+    super.key,
+    required this.player,
+    this.focusNode,
+    this.onKeyEvent,
+    this.onFocusChange,
+    this.onFocusActivity,
+  });
+
+  @override
+  State<VolumeControl> createState() => _VolumeControlState();
+}
+
+class _VolumeControlState extends State<VolumeControl> {
+  /// Whether we're in volume adjust mode (left/right adjusts volume).
+  bool _isAdjustMode = false;
+
+  /// Volume step size for keyboard adjustment.
+  static const double _volumeStep = 5.0;
+
+  SettingsService get _settings => SettingsService.instance;
+
+  void _enterAdjustMode() {
+    setState(() {
+      _isAdjustMode = true;
+    });
+  }
+
+  void _exitAdjustMode() {
+    setState(() {
+      _isAdjustMode = false;
+    });
+  }
+
+  Future<void> _adjustVolume(double delta) async {
+    final currentVolume = widget.player.state.volume;
+    final maxVolume = _settings.read(SettingsService.maxVolume).toDouble();
+    final newVolume = (currentVolume + delta).clamp(0.0, maxVolume);
+    await widget.player.setVolume(newVolume);
+    await _settings.write(SettingsService.volume, newVolume);
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    final key = event.logicalKey;
+
+    if (_isAdjustMode) {
+      if (key.isBackKey) {
+        return handleBackKeyAction(event, _exitAdjustMode);
+      }
+
+      // Notify activity on any key in adjust mode (to reset hide timer)
+      widget.onFocusActivity?.call();
+
+      if (!event.isActionable) {
+        return KeyEventResult.ignored;
+      }
+
+      // In adjust mode: left/right adjusts volume, back/escape exits
+      if (key == LogicalKeyboardKey.arrowLeft) {
+        _adjustVolume(-_volumeStep);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.arrowRight) {
+        _adjustVolume(_volumeStep);
+        return KeyEventResult.handled;
+      }
+      if (key.isSelectKey) {
+        _exitAdjustMode();
+        return KeyEventResult.handled;
+      }
+      // UP/DOWN exits adjust mode and lets navigation continue
+      if (key == LogicalKeyboardKey.arrowUp || key == LogicalKeyboardKey.arrowDown) {
+        _exitAdjustMode();
+        return widget.onKeyEvent?.call(node, event) ?? KeyEventResult.ignored;
+      }
+      return KeyEventResult.handled;
+    }
+
+    if (!event.isActionable) {
+      return KeyEventResult.ignored;
+    }
+
+    return widget.onKeyEvent?.call(node, event) ?? KeyEventResult.ignored;
+  }
+
+  void _handleFocusChange(bool hasFocus) {
+    // Exit adjust mode when focus is lost
+    if (!hasFocus && _isAdjustMode) {
+      _exitAdjustMode();
+    }
+    widget.onFocusChange?.call(hasFocus);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: _settings.listenable(SettingsService.maxVolume),
+      builder: (context, maxVolume, _) {
+        return StreamBuilder<double>(
+          stream: widget.player.streams.volume,
+          initialData: widget.player.state.volume,
+          builder: (context, snapshot) {
+            final volume = snapshot.data ?? 100.0;
+            final isMuted = volume == 0;
+            final muteButton = Semantics(
+              label: isMuted ? t.videoControls.unmuteButton : t.videoControls.muteButton,
+              button: true,
+              excludeSemantics: true,
+              child: IconButton(
+                icon: AppIcon(
+                  isMuted ? Symbols.volume_off_rounded : Symbols.volume_up_rounded,
+                  fill: 1,
+                  color: Colors.white,
+                ),
+                onPressed: () async {
+                  final newVolume = isMuted ? 100.0 : 0.0;
+                  await widget.player.setVolume(newVolume);
+                  await _settings.write(SettingsService.volume, newVolume);
+                },
+              ),
+            );
+
+            return Row(
+              mainAxisSize: .min,
+              children: [
+                if (widget.focusNode != null)
+                  FocusableWrapper(
+                    focusNode: widget.focusNode,
+                    onSelect: _enterAdjustMode,
+                    onKeyEvent: _handleKeyEvent,
+                    onFocusChange: _handleFocusChange,
+                    borderRadius: 20,
+                    autoScroll: false,
+                    useBackgroundFocus: true,
+                    disableScale: true,
+                    semanticLabel: () {
+                      if (_isAdjustMode) return t.videoControls.volumeSlider;
+                      return isMuted ? t.videoControls.unmuteButton : t.videoControls.muteButton;
+                    }(),
+                    child: muteButton,
+                  )
+                else
+                  muteButton,
+                const SizedBox(width: 8),
+                _buildVolumeSlider(volume, maxVolume),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildVolumeSlider(double volume, int maxVolume) {
+    final maxVolumeDouble = maxVolume.toDouble();
+
+    // Calculate 100% marker position as fraction of slider width
+    // Only show marker if max volume > 100
+    final showMarker = maxVolume > 100;
+    final markerPosition = showMarker ? (100.0 / maxVolumeDouble) : 0.0;
+
+    return Listener(
+      onPointerSignal: (event) {
+        if (event is PointerScrollEvent) {
+          final delta = event.scrollDelta.dy;
+          // Scroll up (negative delta) = increase volume, scroll down = decrease
+          final volumeChange = -delta / 20; // Adjust sensitivity (higher = less sensitive)
+          _adjustVolume(volumeChange);
+          widget.onFocusActivity?.call();
+        }
+      },
+      child: SizedBox(
+        width: 100,
+        child: Stack(
+          alignment: .centerLeft,
+          children: [
+            if (showMarker)
+              Positioned(
+                left: 100 * markerPosition - 1, // Adjust for marker width
+                child: Container(
+                  width: 2,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.6),
+                    borderRadius: const BorderRadius.all(Radius.circular(1)),
+                  ),
+                ),
+              ),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 8,
+                trackGap: 0,
+                padding: .zero,
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 0),
+                tickMarkShape: SliderTickMarkShape.noTickMark,
+              ),
+              child: Semantics(
+                label: t.videoControls.volumeSlider,
+                slider: true,
+                child: Slider(
+                  value: volume.clamp(0.0, maxVolumeDouble),
+                  min: 0.0,
+                  max: maxVolumeDouble,
+                  onChanged: (value) {
+                    widget.player.setVolume(value);
+                  },
+                  onChangeEnd: (value) async {
+                    await _settings.write(SettingsService.volume, value);
+                  },
+                  activeColor: Colors.white,
+                  inactiveColor: Colors.white.withValues(alpha: 0.3),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

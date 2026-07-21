@@ -1,0 +1,191 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
+import '../utils/app_logger.dart';
+
+/// Service to manage sleep timer functionality
+/// Allows setting a timer to pause/stop playback after a specified duration
+class SleepTimerService extends ChangeNotifier {
+  static final SleepTimerService _instance = SleepTimerService._internal();
+  factory SleepTimerService() => _instance;
+  SleepTimerService._internal();
+
+  Timer? _timer;
+  DateTime? _endTime;
+  Duration? _duration;
+  Duration? _originalDuration;
+  VoidCallback? _onTimerComplete;
+  bool _needsRestart = false;
+  bool _restartAsEndOfVideo = false;
+  bool _endOfVideoArmed = false;
+  final StreamController<void> _completedController = StreamController<void>.broadcast();
+  final StreamController<void> _promptController = StreamController<void>.broadcast();
+
+  /// Emits when the sleep timer completes (not when cancelled)
+  Stream<void> get onCompleted => _completedController.stream;
+
+  /// Emits when the timer fires and wants to show a "still watching?" prompt
+  Stream<void> get onPrompt => _promptController.stream;
+
+  bool get isActive => (_timer != null && _timer!.isActive) || _endOfVideoArmed;
+
+  /// Whether the sleep timer is armed to fire at the end of the current video
+  /// rather than after a fixed duration.
+  bool get isEndOfVideoMode => _endOfVideoArmed;
+
+  /// The time when the timer will complete
+  DateTime? get endTime => _endTime;
+
+  /// The original duration of the timer
+  Duration? get duration => _duration;
+
+  /// The user-selected duration (unmodified by extendTimer)
+  Duration? get originalDuration => _originalDuration;
+
+  /// Remaining time on the timer
+  Duration? get remainingTime {
+    if (_endTime == null) return null;
+    final remaining = _endTime!.difference(DateTime.now());
+    return remaining.isNegative ? Duration.zero : remaining;
+  }
+
+  void startTimer(Duration duration, VoidCallback onComplete) {
+    cancelTimer();
+
+    _originalDuration = duration;
+    _duration = duration;
+    _endTime = DateTime.now().add(duration);
+    _onTimerComplete = onComplete;
+
+    appLogger.d('Sleep timer started: ${duration.inMinutes} minutes');
+
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      final remaining = remainingTime;
+
+      if (remaining == null || remaining.inSeconds <= 0) {
+        appLogger.d('Sleep timer completed - showing prompt');
+        _stopTimerOnly();
+        _promptController.add(null);
+      } else {
+        notifyListeners();
+      }
+    });
+
+    notifyListeners();
+  }
+
+  /// Arm the sleep timer to fire when the currently playing video reaches its end.
+  /// Unlike [startTimer], no periodic timer runs — playback completion is reported
+  /// externally via [notifyVideoCompleted].
+  void armEndOfVideo(VoidCallback onComplete) {
+    cancelTimer();
+
+    _endOfVideoArmed = true;
+    _onTimerComplete = onComplete;
+
+    appLogger.d('Sleep timer armed: end of current video');
+    notifyListeners();
+  }
+
+  /// Notify the service that the currently playing video has completed.
+  /// If armed via [armEndOfVideo], fires the completion callback and resets the mode.
+  /// Safe to call unconditionally — does nothing when end-of-video mode is not armed.
+  void notifyVideoCompleted() {
+    if (!_endOfVideoArmed) return;
+
+    appLogger.d('Sleep timer (end of video) triggered');
+    _endOfVideoArmed = false;
+    _executeCallback();
+    notifyListeners();
+  }
+
+  /// Cancel the active timer (user-initiated, clears everything)
+  void cancelTimer() {
+    if (_timer != null || _originalDuration != null || _endOfVideoArmed) {
+      appLogger.d('Sleep timer cancelled');
+      _timer?.cancel();
+      _timer = null;
+      _endTime = null;
+      _duration = null;
+      _originalDuration = null;
+      _onTimerComplete = null;
+      _endOfVideoArmed = false;
+      _restartAsEndOfVideo = false;
+      notifyListeners();
+    }
+  }
+
+  void restartTimer() {
+    if (_originalDuration != null && _onTimerComplete != null) {
+      final duration = _originalDuration!;
+      final callback = _onTimerComplete!;
+      startTimer(duration, callback);
+    }
+  }
+
+  /// Execute the completion callback directly (fallback path)
+  void executeCompletion() {
+    _executeCallback();
+  }
+
+  /// Mark that the timer should restart when a new playback session begins
+  /// (e.g. user exited the player and started something new)
+  void markNeedsRestart() {
+    if (isActive || _originalDuration != null) {
+      _needsRestart = true;
+      _restartAsEndOfVideo = _endOfVideoArmed;
+    }
+  }
+
+  /// Restart the timer if it was marked for restart (new playback session).
+  /// [onComplete] provides the new callback for the fresh session.
+  void restartIfNeeded(VoidCallback onComplete) {
+    if (!_needsRestart) return;
+    _needsRestart = false;
+
+    if (_restartAsEndOfVideo) {
+      _restartAsEndOfVideo = false;
+      armEndOfVideo(onComplete);
+    } else if (_originalDuration != null) {
+      startTimer(_originalDuration!, onComplete);
+    }
+  }
+
+  /// Extend the current timer by the specified duration
+  void extendTimer(Duration additionalTime) {
+    if (_endTime != null) {
+      _endTime = _endTime!.add(additionalTime);
+      _duration = _duration != null ? _duration! + additionalTime : additionalTime;
+      appLogger.d('Sleep timer extended by ${additionalTime.inMinutes} minutes');
+      notifyListeners();
+    }
+  }
+
+  /// Stop the periodic timer but preserve _originalDuration and _onTimerComplete
+  /// for the prompt flow (restart/completion)
+  void _stopTimerOnly() {
+    _timer?.cancel();
+    _timer = null;
+    _endTime = null;
+    _duration = null;
+    notifyListeners();
+  }
+
+  void _executeCallback() {
+    if (_onTimerComplete != null) {
+      try {
+        _onTimerComplete!();
+      } catch (e) {
+        appLogger.e('Error executing sleep timer callback', error: e);
+      }
+    }
+    _completedController.add(null);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _completedController.close();
+    _promptController.close();
+    super.dispose();
+  }
+}

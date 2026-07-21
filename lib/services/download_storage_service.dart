@@ -1,0 +1,484 @@
+import 'dart:convert';
+import '../media/ids.dart';
+import 'dart:io';
+import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
+
+import '../media/media_item.dart';
+import '../utils/app_logger.dart';
+import '../utils/formatters.dart';
+import 'settings_service.dart';
+
+/// Thrown when the downloads storage layer cannot create or access a directory
+/// (permission denied, quota exceeded, SAF permission revoked, etc.).
+class DownloadStorageException implements Exception {
+  final String message;
+  final String path;
+  final Object cause;
+
+  DownloadStorageException(this.message, this.path, this.cause);
+
+  @override
+  String toString() => 'DownloadStorageException: $message (path: $path, cause: $cause)';
+}
+
+class DownloadStorageService {
+  static DownloadStorageService? _instance;
+  static DownloadStorageService get instance => _instance ??= DownloadStorageService._();
+  DownloadStorageService._();
+
+  /// Drop the cached singleton so the next [instance] call returns a fresh
+  /// service. Test-only.
+  @visibleForTesting
+  static void resetForTesting() {
+    _instance = null;
+  }
+
+  Directory? _baseDownloadsDir;
+  String? _artworkDirectoryPath;
+
+  SettingsService? _settingsService;
+  String? _customDownloadPath;
+  String _customPathType = 'file';
+
+  bool get isUsingSaf => Platform.isAndroid && _customPathType == 'saf' && _customDownloadPath != null;
+
+  String? get safBaseUri => isUsingSaf ? _customDownloadPath : null;
+
+  String? get artworkDirectoryPath => _artworkDirectoryPath;
+
+  Future<void> initialize(SettingsService settingsService) async {
+    _settingsService = settingsService;
+    _customDownloadPath = settingsService.read(SettingsService.customDownloadPath);
+    _customPathType = settingsService.read(SettingsService.customDownloadPathType) ?? 'file';
+    _baseDownloadsDir = null;
+    _artworkDirectoryPath = null;
+
+    await getArtworkDirectory();
+  }
+
+  Future<void> refreshCustomPath() async {
+    if (_settingsService != null) {
+      _customDownloadPath = _settingsService!.read(SettingsService.customDownloadPath);
+      _customPathType = _settingsService!.read(SettingsService.customDownloadPathType) ?? 'file';
+      _baseDownloadsDir = null;
+      _artworkDirectoryPath = null;
+      await getArtworkDirectory();
+    }
+  }
+
+  /// Get the base app directory for storing data.
+  /// Uses ApplicationDocumentsDirectory on mobile, ApplicationSupportDirectory on desktop.
+  Future<Directory> _getBaseAppDir() {
+    if (Platform.isAndroid || Platform.isIOS) {
+      return getApplicationDocumentsDirectory();
+    }
+    return getApplicationSupportDirectory();
+  }
+
+  /// Format episode filename base: S{XX}E{XX} - {Title}
+  String _formatEpisodeFileName(MediaItem episode) {
+    final season = padNumber(episode.parentIndex ?? 0, 2);
+    final ep = padNumber(episode.index ?? 0, 2);
+    final episodeName = _sanitizeFileName(episode.title!);
+    return 'S${season}E$ep - $episodeName';
+  }
+
+  bool isUsingCustomPath() => _customDownloadPath != null;
+
+  Future<String> getCurrentDownloadPathDisplay() async {
+    if (_customDownloadPath != null) {
+      return _customDownloadPath!;
+    }
+    final dir = await getDownloadsDirectory();
+    return dir.path;
+  }
+
+  Future<bool> isDirectoryWritable(Directory dir) async {
+    try {
+      if (!await dir.exists()) {
+        await dir.create(recursive: true);
+      }
+      // Test write access with a temp file
+      final testFile = File(path.join(dir.path, '.write_test_${DateTime.now().millisecondsSinceEpoch}'));
+      await testFile.writeAsString('test');
+      await testFile.delete();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<Directory> getDownloadsDirectory() async {
+    if (_baseDownloadsDir != null) return _baseDownloadsDir!;
+
+    if (_customDownloadPath != null && _customPathType == 'file') {
+      final customDir = Directory(_customDownloadPath!);
+      if (await isDirectoryWritable(customDir)) {
+        _baseDownloadsDir = customDir;
+        return _baseDownloadsDir!;
+      }
+      // Fall through to default if custom path is not writable
+    }
+
+    final baseDir = await _getBaseAppDir();
+    _baseDownloadsDir = await _ensureDirectoryExists(Directory(path.join(baseDir.path, 'downloads')));
+    return _baseDownloadsDir!;
+  }
+
+  /// Get centralized artwork directory for offline artwork caching
+  /// This directory stores artwork files with hashed filenames for deduplication
+  Future<Directory> getArtworkDirectory() async {
+    // If custom download path is set, put artwork alongside downloads
+    if (_customDownloadPath != null && _customPathType == 'file') {
+      final customDir = Directory(_customDownloadPath!);
+      final parent = customDir.parent;
+      final artworkDir = Directory(path.join(parent.path, 'artwork'));
+      try {
+        // Validate writeability for custom artwork path
+        if (await isDirectoryWritable(artworkDir)) {
+          _artworkDirectoryPath = artworkDir.path;
+          return artworkDir;
+        }
+      } catch (e) {
+        // Fall through to default if we can't create artwork dir
+      }
+    }
+
+    // Default: Get the app base directory directly (not downloads directory)
+    final baseDir = await _getBaseAppDir();
+    final artworkDir = await _ensureDirectoryExists(Directory(path.join(baseDir.path, 'artwork')));
+    // Cache the path for synchronous access
+    _artworkDirectoryPath = artworkDir.path;
+    return artworkDir;
+  }
+
+  /// Get artwork file path from a server-side thumb path (synchronous, requires initialization).
+  /// Works for any backend — the thumb path is hashed alongside the serverId,
+  /// so Plex `/library/metadata/.../thumb` and Jellyfin
+  /// `/Items/.../Images/Primary` paths both round-trip cleanly.
+  /// Returns path to cached artwork file using hash of the thumb URL, or null if not initialized.
+  /// Example: artwork/a1b2c3d4e5f6.jpg
+  String? getArtworkPathSync(ServerId serverId, String thumbPath) {
+    if (_artworkDirectoryPath == null) return null;
+    final hash = _hashArtworkPath(serverId, thumbPath);
+    return path.join(_artworkDirectoryPath!, '$hash.jpg');
+  }
+
+  /// Get artwork file path from a server-side thumb path (async version).
+  /// Backend-neutral — see [getArtworkPathSync] for details.
+  Future<String> getArtworkPathFromThumb(ServerId serverId, String thumbPath) async {
+    final artworkDir = await getArtworkDirectory();
+    final hash = _hashArtworkPath(serverId, thumbPath);
+    return path.join(artworkDir.path, '$hash.jpg');
+  }
+
+  Future<bool> artworkExists(ServerId serverId, String thumbPath) async {
+    final artworkPath = await getArtworkPathFromThumb(serverId, thumbPath);
+    return File(artworkPath).exists();
+  }
+
+  /// Hash artwork path for filename using MD5 for stability across app restarts
+  String _hashArtworkPath(ServerId serverId, String thumbPath) {
+    final combined = '$serverId:$thumbPath';
+    return md5.convert(utf8.encode(combined)).toString();
+  }
+
+  Future<Directory> getMediaDirectory(ServerId serverId, String ratingKey) async {
+    final baseDir = await getDownloadsDirectory();
+    return _ensureDirectoryExists(Directory(path.join(baseDir.path, serverId, ratingKey)));
+  }
+
+  Future<String> getVideoFilePath(ServerId serverId, String ratingKey, String extension) async {
+    final mediaDir = await getMediaDirectory(serverId, ratingKey);
+    return path.join(mediaDir.path, 'video.$extension');
+  }
+
+  Future<Directory> getSubtitlesDirectory(ServerId serverId, String ratingKey) async {
+    final mediaDir = await getMediaDirectory(serverId, ratingKey);
+    final subtitlesDir = Directory(path.join(mediaDir.path, 'subtitles'));
+    if (!await subtitlesDir.exists()) {
+      await subtitlesDir.create(recursive: true);
+    }
+    return subtitlesDir;
+  }
+
+  Future<String> getSubtitlePath(ServerId serverId, String ratingKey, int trackId, String extension) async {
+    final subtitlesDir = await getSubtitlesDirectory(serverId, ratingKey);
+    return path.join(subtitlesDir.path, '$trackId.$extension');
+  }
+
+  /// Sanitize a filename by removing invalid filesystem characters
+  String _sanitizeFileName(String name) {
+    // Remove invalid filesystem characters: < > : " / \ | ? *
+    // Also remove leading/trailing whitespace and dots
+    return name
+        .replaceAll(RegExp(r'[<>:"/\\|?*]'), '')
+        .replaceAll(RegExp(r'^\.+|\.+$'), '')
+        .replaceAll('.', '_')
+        .trim();
+  }
+
+  /// Ensure a directory exists, creating it if necessary.
+  /// `Directory.create(recursive: true)` is idempotent — it no-ops if the
+  /// directory already exists.
+  Future<Directory> _ensureDirectoryExists(Directory dir) async {
+    try {
+      await dir.create(recursive: true);
+      return dir;
+    } catch (e, st) {
+      appLogger.e('Failed to ensure directory exists: ${dir.path}', error: e, stackTrace: st);
+      throw DownloadStorageException('Cannot create directory', dir.path, e);
+    }
+  }
+
+  /// Format a media title with optional year: "Title (YYYY)" or "Title"
+  String _formatTitleWithYear(String title, int? year) {
+    final sanitized = _sanitizeFileName(title);
+    return year != null ? '$sanitized ($year)' : sanitized;
+  }
+
+  String _getMovieFolderName(MediaItem movie) {
+    return _formatTitleWithYear(movie.title!, movie.year);
+  }
+
+  /// Get the folder name for a TV show: "Show Name (YYYY)"
+  /// [showYear]: Pass explicitly for episodes (episode.year may differ from show's year)
+  String _getShowFolderName(MediaItem metadata, {int? showYear}) {
+    final title = metadata.grandparentTitle ?? metadata.title!;
+    final year = showYear ?? metadata.year;
+    return _formatTitleWithYear(title, year);
+  }
+
+  Future<Directory> getMovieDirectory(MediaItem movie) async {
+    final baseDir = await getDownloadsDirectory();
+    final movieFolder = _getMovieFolderName(movie);
+    return _ensureDirectoryExists(Directory(path.join(baseDir.path, 'Movies', movieFolder)));
+  }
+
+  /// Get movie video file path: .../Movie Name (YYYY)/Movie Name (YYYY).{ext}
+  Future<String> getMovieVideoPath(MediaItem movie, String extension) async {
+    final movieDir = await getMovieDirectory(movie);
+    final fileName = _getMovieFolderName(movie);
+    return path.join(movieDir.path, '$fileName.$extension');
+  }
+
+  /// Get show directory: downloads/TV Shows/{Show Name} ({Year})/
+  /// [showYear]: Pass the show's premiere year explicitly (for episodes, the episode's
+  /// year may differ from the show's year). If not provided, uses metadata.year.
+  Future<Directory> getShowDirectory(MediaItem metadata, {int? showYear}) async {
+    final baseDir = await getDownloadsDirectory();
+    final showFolder = _getShowFolderName(metadata, showYear: showYear);
+    return _ensureDirectoryExists(Directory(path.join(baseDir.path, 'TV Shows', showFolder)));
+  }
+
+  /// Get season directory: .../TV Shows/{Show}/Season {XX}/
+  /// [showYear]: Pass the show's premiere year (not episode or season year)
+  Future<Directory> getSeasonDirectory(MediaItem metadata, {int? showYear}) async {
+    final showDir = await getShowDirectory(metadata, showYear: showYear);
+    final seasonNum = padNumber(metadata.parentIndex ?? 0, 2);
+    return _ensureDirectoryExists(Directory(path.join(showDir.path, 'Season $seasonNum')));
+  }
+
+  /// Get base path info for episode files (season directory path and formatted filename).
+  /// [showYear]: Pass the show's premiere year (not episode year)
+  Future<({String seasonDirPath, String fileName})> _getEpisodeBasePath(MediaItem episode, {int? showYear}) async {
+    final seasonDir = await getSeasonDirectory(episode, showYear: showYear);
+    final fileName = _formatEpisodeFileName(episode);
+    return (seasonDirPath: seasonDir.path, fileName: fileName);
+  }
+
+  /// Get episode video file path: .../Season XX/S{XX}E{XX} - {Title}.{ext}
+  /// [showYear]: Pass the show's premiere year (not episode year)
+  Future<String> getEpisodeVideoPath(MediaItem episode, String extension, {int? showYear}) async {
+    final base = await _getEpisodeBasePath(episode, showYear: showYear);
+    return path.join(base.seasonDirPath, '${base.fileName}.$extension');
+  }
+
+  /// Get episode thumbnail path: .../Season XX/S{XX}E{XX} - {Title}.jpg
+  /// [showYear]: Pass the show's premiere year (not episode year)
+  Future<String> getEpisodeThumbnailPath(MediaItem episode, {int? showYear}) async {
+    final base = await _getEpisodeBasePath(episode, showYear: showYear);
+    return path.join(base.seasonDirPath, '${base.fileName}.jpg');
+  }
+
+  /// Get subtitles directory for episode: .../Season XX/S{XX}E{XX} - {Title}_subs/
+  /// [showYear]: Pass the show's premiere year (not episode year)
+  Future<Directory> getEpisodeSubtitlesDirectory(MediaItem episode, {int? showYear}) async {
+    final base = await _getEpisodeBasePath(episode, showYear: showYear);
+    return _ensureDirectoryExists(Directory(path.join(base.seasonDirPath, '${base.fileName}_subs')));
+  }
+
+  /// [showYear]: Pass the show's premiere year (not episode year)
+  Future<String> getEpisodeSubtitlePath(MediaItem episode, int trackId, String extension, {int? showYear}) async {
+    final subsDir = await getEpisodeSubtitlesDirectory(episode, showYear: showYear);
+    return path.join(subsDir.path, '$trackId.$extension');
+  }
+
+  Future<Directory> getMovieSubtitlesDirectory(MediaItem movie) async {
+    final movieDir = await getMovieDirectory(movie);
+    final baseName = _getMovieFolderName(movie);
+    return _ensureDirectoryExists(Directory(path.join(movieDir.path, '${baseName}_subs')));
+  }
+
+  Future<String> getMovieSubtitlePath(MediaItem movie, int trackId, String extension) async {
+    final subsDir = await getMovieSubtitlesDirectory(movie);
+    return path.join(subsDir.path, '$trackId.$extension');
+  }
+
+  /// Convert an absolute file path to a relative path (for database storage)
+  /// This ensures paths remain valid across app reinstalls on iOS where
+  /// the container UUID can change.
+  /// Returns a path relative to the app's documents directory.
+  Future<String> toRelativePath(String absolutePath) async {
+    final baseDir = await _getBaseAppDir();
+
+    // Strip the base directory prefix iteratively — background_downloader
+    // recovery paths can contain the base dir doubled (e.g.
+    // /data/.../app_flutter/data/.../app_flutter/downloads/...).
+    var result = absolutePath;
+    while (result.startsWith(baseDir.path)) {
+      result = result.substring(baseDir.path.length);
+      if (result.startsWith('/') || result.startsWith('\\')) {
+        result = result.substring(1);
+      }
+    }
+    if (result != absolutePath) return result;
+
+    return absolutePath;
+  }
+
+  /// Convert a relative file path to an absolute path (for file operations)
+  /// Reconstructs the full path using the current app documents directory.
+  Future<String> toAbsolutePath(String relativePath) async {
+    if (path.isAbsolute(relativePath)) {
+      return relativePath;
+    }
+
+    final baseDir = await _getBaseAppDir();
+    return path.join(baseDir.path, relativePath);
+  }
+
+  /// Convert a potentially absolute path (from old database entries) to absolute
+  /// This handles both old absolute paths and new relative paths, including
+  /// corrupted paths that contain nested base-dir fragments without a leading slash
+  /// (e.g. "data/user/0/.../app_flutter/downloads/...").
+  Future<String> ensureAbsolutePath(String storedPath) async {
+    appLogger.d('ensureAbsolutePath: input="$storedPath", isAbsolute=${path.isAbsolute(storedPath)}');
+    final baseDir = await _getBaseAppDir();
+    final normalizedCandidates = <String>[];
+
+    void addCandidate(String candidate) {
+      if (candidate.isEmpty) return;
+      final normalized = path.normalize(candidate);
+      if (!normalizedCandidates.contains(normalized)) {
+        normalizedCandidates.add(normalized);
+      }
+    }
+
+    String trimLeadingSeparators(String value) => value.replaceFirst(RegExp(r'^[\\/]+'), '');
+
+    if (path.isAbsolute(storedPath)) {
+      // Keep the original absolute path first (covers valid custom download paths).
+      addCandidate(storedPath);
+
+      // Recover from doubled app base path corruption:
+      // /data/.../app_flutter/data/.../app_flutter/downloads/...
+      final firstBaseIndex = storedPath.indexOf(baseDir.path);
+      if (firstBaseIndex != -1) {
+        final secondBaseIndex = storedPath.indexOf(baseDir.path, firstBaseIndex + baseDir.path.length);
+        if (secondBaseIndex != -1) {
+          final tail = trimLeadingSeparators(storedPath.substring(secondBaseIndex + baseDir.path.length));
+          addCandidate(path.join(baseDir.path, tail));
+        }
+      }
+
+      // Recover from paths that contain downloads/ but wrong prefix.
+      final downloadsIndex = storedPath.lastIndexOf('downloads/');
+      if (downloadsIndex != -1) {
+        final relativePart = storedPath.substring(downloadsIndex);
+        addCandidate(await toAbsolutePath(relativePart));
+      }
+    } else {
+      // Normal relative path.
+      addCandidate(await toAbsolutePath(storedPath));
+
+      // Recover from nested base-dir fragment without leading slash.
+      final baseIndex = storedPath.indexOf(baseDir.path);
+      if (baseIndex > 0) {
+        final tail = trimLeadingSeparators(storedPath.substring(baseIndex + baseDir.path.length));
+        addCandidate(path.join(baseDir.path, tail));
+      }
+
+      // Recover from nested fragment containing downloads/.
+      final downloadsIndex = storedPath.lastIndexOf('downloads/');
+      if (downloadsIndex >= 0) {
+        addCandidate(await toAbsolutePath(storedPath.substring(downloadsIndex)));
+      }
+    }
+
+    // Prefer the first candidate that exists on disk.
+    for (final candidate in normalizedCandidates) {
+      if (await File(candidate).exists()) {
+        appLogger.d('ensureAbsolutePath: resolved="$candidate"');
+        return candidate;
+      }
+    }
+
+    // Fall back to the most conservative candidate if none currently exist.
+    final fallback = normalizedCandidates.isNotEmpty ? normalizedCandidates.first : await toAbsolutePath(storedPath);
+    appLogger.d('ensureAbsolutePath: resolved="$fallback" (fallback)');
+    return fallback;
+  }
+
+  List<String> getMovieSafPathComponents(MediaItem movie) {
+    return ['Movies', _getMovieFolderName(movie)];
+  }
+
+  List<String> getEpisodeSafPathComponents(MediaItem episode, {int? showYear}) {
+    final showFolder = _getShowFolderName(episode, showYear: showYear);
+    final seasonNum = padNumber(episode.parentIndex ?? 0, 2);
+    return ['TV Shows', showFolder, 'Season $seasonNum'];
+  }
+
+  /// Get SAF path components for a show directory: ['TV Shows', {showFolder}]
+  List<String> getShowSafPathComponents(MediaItem metadata, {int? showYear}) {
+    return ['TV Shows', _getShowFolderName(metadata, showYear: showYear)];
+  }
+
+  /// Get SAF path components for a season directory when called with season metadata:
+  /// ['TV Shows', {showFolder}, 'Season XX']. Uses season.index for the season number.
+  List<String> getSeasonSafPathComponents(MediaItem season, {int? showYear}) {
+    final showFolder = _getShowFolderName(season, showYear: showYear);
+    final seasonNum = padNumber(season.index ?? 0, 2);
+    return ['TV Shows', showFolder, 'Season $seasonNum'];
+  }
+
+  String getMovieSafFileName(MediaItem movie, String extension) {
+    return '${_getMovieFolderName(movie)}.$extension';
+  }
+
+  String getEpisodeSafFileName(MediaItem episode, String extension) {
+    final fileName = _formatEpisodeFileName(episode);
+    return '$fileName.$extension';
+  }
+
+  /// Get the extension-less episode filename used for SAF lookups.
+  String getEpisodeSafBaseName(MediaItem episode) => _formatEpisodeFileName(episode);
+
+  bool isSafUri(String storedPath) {
+    return storedPath.startsWith('content://');
+  }
+
+  /// Get a readable path for a stored path (handles both SAF URIs and file paths)
+  /// For SAF URIs, returns the URI as-is (content:// URIs work with media players)
+  /// For file paths, ensures the path is absolute
+  Future<String> getReadablePath(String storedPath) async {
+    if (isSafUri(storedPath)) {
+      return storedPath;
+    }
+    return await ensureAbsolutePath(storedPath);
+  }
+}

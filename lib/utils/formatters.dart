@@ -1,0 +1,221 @@
+import 'package:duration/duration.dart';
+import 'package:duration/locale.dart';
+import 'package:intl/intl.dart';
+import '../i18n/strings.g.dart';
+
+/// Formats a number with a minimum number of digits using leading zeros.
+///
+/// Example: `padNumber(5, 3)` returns "005"
+String padNumber(int number, int width) {
+  return number.toString().padLeft(width, '0');
+}
+
+class ByteFormatter {
+  ByteFormatter._();
+
+  static const int _kb = 1024;
+  static const int _mb = _kb * 1024;
+  static const int _gb = _mb * 1024;
+
+  /// Format bytes to human-readable string (e.g., "1.5 GB", "256.3 MB")
+  static String formatBytes(int bytes, {int? decimals}) {
+    if (bytes < _kb) return '$bytes B';
+    if (bytes < _mb) {
+      return '${(bytes / _kb).toStringAsFixed(decimals ?? 1)} KB';
+    }
+    if (bytes < _gb) {
+      return '${(bytes / _mb).toStringAsFixed(decimals ?? 1)} MB';
+    }
+    return '${(bytes / _gb).toStringAsFixed(decimals ?? 2)} GB';
+  }
+
+  /// Format speed in bytes per second to human-readable string
+  static String formatSpeed(double bytesPerSecond) {
+    if (bytesPerSecond < _kb) {
+      return '${bytesPerSecond.toStringAsFixed(0)} B/s';
+    }
+    if (bytesPerSecond < _mb) {
+      return '${(bytesPerSecond / _kb).toStringAsFixed(1)} KB/s';
+    }
+    return '${(bytesPerSecond / _mb).toStringAsFixed(1)} MB/s';
+  }
+
+  /// Format bitrate in kbps to human-readable string
+  static String formatBitrate(int kbps) {
+    if (kbps < 1000) return '$kbps kbps';
+    return '${(kbps / 1000).toStringAsFixed(1)} Mbps';
+  }
+}
+
+/// Formats a duration in human-readable textual format (e.g., "1h 23m" or "1 hour 23 minutes").
+/// Uses localized unit names based on the current app locale.
+/// Shows hours and minutes only (no seconds).
+///
+/// Used for: media cards, media details, playlists.
+String formatDurationTextual(int milliseconds, {bool abbreviated = true}) {
+  final duration = Duration(milliseconds: milliseconds);
+
+  final durationLocale = _getDurationLocale();
+  return prettyDuration(
+    duration,
+    abbreviated: abbreviated,
+    locale: durationLocale,
+    delimiter: abbreviated ? ' ' : ', ',
+    spacer: '',
+    tersity: DurationTersity.minute,
+  );
+}
+
+/// Formats a duration in human-readable textual format with seconds (e.g., "1h 23m 45s").
+/// Uses localized unit names based on the current app locale.
+/// Shows hours, minutes, and seconds.
+///
+/// Used for: sleep timer countdown.
+String formatDurationWithSeconds(Duration duration) {
+  // Get the appropriate locale for the duration package
+  final durationLocale = _getDurationLocale();
+
+  return prettyDuration(
+    duration,
+    abbreviated: true,
+    locale: durationLocale,
+    delimiter: ' ',
+    spacer: '',
+    tersity: DurationTersity.second,
+  );
+}
+
+/// Formats a duration in timestamp format (e.g., "1:23:45" or "23:45").
+/// This format is not localized as it follows universal digital clock conventions.
+/// Shows H:MM:SS or M:SS depending on duration.
+///
+/// Used for: video controls, chapters, episode durations.
+String formatDurationTimestamp(Duration duration) {
+  final isNegative = duration.isNegative;
+  final absoluteDuration = duration.abs();
+
+  final hours = absoluteDuration.inHours;
+  final minutes = absoluteDuration.inMinutes.remainder(60);
+  final seconds = absoluteDuration.inSeconds.remainder(60);
+
+  final result = hours > 0
+      ? '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}'
+      : '$minutes:${seconds.toString().padLeft(2, '0')}';
+
+  return isNegative ? '-$result' : result;
+}
+
+/// Formats a sync offset in milliseconds with sign indicator (e.g., "+150ms", "-15.1s").
+/// Shows milliseconds for values < 10s, decimal seconds for larger values.
+///
+/// Used for: audio sync sheet, sync offset controls.
+String formatSyncOffset(double offsetMs) {
+  final sign = offsetMs >= 0 ? '+' : '-';
+  final absMs = offsetMs.abs().round();
+  final durationLocale = _getDurationLocale();
+
+  if (absMs >= 10_000) {
+    final seconds = (offsetMs.abs() / 1000).toStringAsFixed(1);
+    final unit = durationLocale.second(1, true);
+    return '$sign$seconds$unit';
+  }
+
+  final unit = durationLocale.millisecond(1, true);
+  return '$sign$absMs$unit';
+}
+
+/// Gets the duration package locale based on the current app locale.
+/// Falls back to English if the locale is not supported by the duration package.
+DurationLocale _getDurationLocale() {
+  final appLocale = LocaleSettings.currentLocale;
+  final languageCode = appLocale.languageCode;
+
+  // Map supported locales to duration package locales
+  // The duration package supports many languages, but we'll focus on the ones
+  // that our app supports: en, de, it, nl, sv, zh
+  try {
+    return DurationLocale.fromLanguageCode(languageCode) ?? const EnglishDurationLocale();
+  } catch (e) {
+    return const EnglishDurationLocale();
+  }
+}
+
+/// Formats a [DateTime] as a clock time string, respecting the system 24-hour preference.
+/// Uses `DateFormat.Hm` for 24-hour format and `DateFormat.jm` for 12-hour format.
+String formatClockTime(DateTime time, {required bool is24Hour}) {
+  final locale = LocaleSettings.currentLocale.languageCode;
+  final formatter = is24Hour ? DateFormat.Hm(locale) : DateFormat.jm(locale);
+  return formatter.format(time);
+}
+
+/// Formats a date as Today/Tomorrow or a localized abbreviated weekday.
+String formatRelativeDayLabel(DateTime date, {DateTime? now}) {
+  final reference = now ?? DateTime.now();
+  final today = DateTime(reference.year, reference.month, reference.day);
+  final targetDay = DateTime(date.year, date.month, date.day);
+  final diff = targetDay.difference(today).inDays;
+  return switch (diff) {
+    0 => t.liveTv.today,
+    1 => t.liveTv.tomorrow,
+    _ => DateFormat.E(LocaleSettings.currentLocale.languageCode).format(date),
+  };
+}
+
+/// Formats the clock time at which media will finish playing, given the remaining duration.
+/// Returns a localized time string like "6:12 PM" or "18:12" depending on system setting.
+String formatFinishTime(Duration remaining, {double rate = 1.0, required bool is24Hour}) {
+  final adjustedRemaining = remaining * (1.0 / rate);
+  final finishTime = DateTime.now().add(adjustedRemaining);
+  return formatClockTime(finishTime, is24Hour: is24Hour);
+}
+
+String toBulletedString(List<String> parts) {
+  return parts.join(' · ');
+}
+
+String? formatSeasonEpisodeLabel(int? season, int? episode) {
+  if (season == null || episode == null) return null;
+  return 'S$season E$episode';
+}
+
+String formatRating(double value) =>
+    value == value.truncateToDouble() ? value.toInt().toString() : value.toStringAsFixed(1);
+
+final RegExp _trailingZeroPattern = RegExp(r'\.?0+$');
+
+/// Format a playback rate for display (e.g. 1.25 → "1.25x", 2.0 → "2x").
+/// When [normalAtOne] is true, 1.0 renders as "Normal" for menu labels;
+/// the in-player pill passes false to keep a numeric indicator.
+String formatPlaybackRate(double rate, {bool normalAtOne = false}) {
+  if (normalAtOne && (rate - 1.0).abs() < 0.005) return 'Normal';
+  return '${rate.toStringAsFixed(2).replaceFirst(_trailingZeroPattern, '')}x';
+}
+
+/// Takes a date string in the format "YYYY-MM-DD" and returns a localized full date string
+/// If there is any error, `dateString` is returned as is
+String formatFullDate(String dateString) {
+  try {
+    final date = DateTime.parse(dateString);
+
+    final formatter = DateFormat.yMMMMd(LocaleSettings.currentLocale.languageCode);
+
+    return formatter.format(date);
+  } catch (e) {
+    return dateString;
+  }
+}
+
+/// Like [formatFullDate] but uses an abbreviated month name (`DateFormat.yMMMd`)
+/// to keep the result compact for space-constrained, single-line layouts.
+/// If there is any error, `dateString` is returned as is
+String formatAbbreviatedDate(String dateString) {
+  try {
+    final date = DateTime.parse(dateString);
+
+    final formatter = DateFormat.yMMMd(LocaleSettings.currentLocale.languageCode);
+
+    return formatter.format(date);
+  } catch (e) {
+    return dateString;
+  }
+}

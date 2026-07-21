@@ -1,0 +1,357 @@
+import 'package:flutter/material.dart';
+import '../focus/dpad_navigator.dart';
+import '../focus/focusable_tile_mixin.dart';
+import 'clickable_cursor.dart';
+
+/// A ListTile that accepts a FocusNode for keyboard/controller navigation.
+///
+/// Uses Flutter's native ListTile focus support - no custom styling wrapper.
+/// The focusNode allows programmatic focus control (e.g., auto-focus first item).
+class FocusableListTile extends StatefulWidget {
+  final Widget? title;
+
+  final Widget? subtitle;
+
+  final Widget? leading;
+
+  final Widget? trailing;
+
+  final VoidCallback? onTap;
+
+  final VoidCallback? onLongPress;
+
+  final bool dense;
+
+  final bool enabled;
+
+  final bool selected;
+
+  /// Optional FocusNode for keyboard/controller navigation.
+  final FocusNode? focusNode;
+
+  final bool autofocus;
+
+  final EdgeInsetsGeometry? contentPadding;
+
+  /// If true, consumes the first select key event to avoid accidental activation.
+  final bool suppressInitialSelect;
+
+  final Color? hoverColor;
+
+  final Color? textColor;
+
+  final Color? iconColor;
+
+  final VisualDensity? visualDensity;
+
+  final double? horizontalTitleGap;
+
+  final double? minLeadingWidth;
+
+  const FocusableListTile({
+    super.key,
+    this.title,
+    this.subtitle,
+    this.leading,
+    this.trailing,
+    this.onTap,
+    this.onLongPress,
+    this.dense = true,
+    this.enabled = true,
+    this.selected = false,
+    this.focusNode,
+    this.autofocus = false,
+    this.contentPadding,
+    this.suppressInitialSelect = false,
+    this.hoverColor,
+    this.textColor,
+    this.iconColor,
+    this.visualDensity = const VisualDensity(vertical: -3),
+    this.horizontalTitleGap,
+    this.minLeadingWidth,
+  });
+
+  @override
+  State<FocusableListTile> createState() => _FocusableListTileState();
+}
+
+class _FocusableListTileState extends State<FocusableListTile> with FocusableTileStateMixin<FocusableListTile> {
+  bool _suppressionConsumed = false;
+  bool _isHoveredOrFocused = false;
+
+  @override
+  FocusNode? get widgetFocusNode => widget.focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    initFocusNode();
+  }
+
+  @override
+  void didUpdateWidget(FocusableListTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    updateFocusNode(oldWidget.focusNode);
+  }
+
+  @override
+  void dispose() {
+    disposeFocusNode();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // When hovered/focused with a custom hoverColor, use onError-style foreground
+    // to keep text readable against the colored background.
+    final needsContrastSwap = _isHoveredOrFocused && widget.hoverColor != null && widget.textColor != null;
+    final textColor = needsContrastSwap ? Theme.of(context).colorScheme.onError : widget.textColor;
+    final iconColor = needsContrastSwap ? Theme.of(context).colorScheme.onError : widget.iconColor;
+
+    final Widget tile = MouseRegion(
+      cursor: widget.enabled && (widget.onTap != null || widget.onLongPress != null)
+          ? SystemMouseCursors.click
+          : MouseCursor.defer,
+      onEnter: widget.hoverColor != null ? (_) => setState(() => _isHoveredOrFocused = true) : null,
+      onExit: widget.hoverColor != null ? (_) => setState(() => _isHoveredOrFocused = false) : null,
+      child: ListTile(
+        title: widget.title,
+        subtitle: widget.subtitle,
+        leading: widget.leading,
+        trailing: widget.trailing,
+        onTap: widget.onTap,
+        onLongPress: widget.onLongPress,
+        dense: widget.dense,
+        enabled: widget.enabled,
+        selected: widget.selected,
+        contentPadding: widget.contentPadding,
+        visualDensity: widget.visualDensity,
+        focusNode: widget.suppressInitialSelect ? null : effectiveFocusNode,
+        autofocus: widget.suppressInitialSelect ? false : widget.autofocus,
+        hoverColor: widget.hoverColor,
+        textColor: textColor,
+        iconColor: iconColor,
+        horizontalTitleGap: widget.horizontalTitleGap,
+        minLeadingWidth: widget.minLeadingWidth,
+      ),
+    );
+
+    if (!widget.suppressInitialSelect) {
+      return tile;
+    }
+
+    return Focus(
+      focusNode: effectiveFocusNode,
+      autofocus: widget.autofocus,
+      onKeyEvent: (node, event) {
+        if (SelectKeyUpSuppressor.consumeIfSuppressed(event)) {
+          return KeyEventResult.handled;
+        }
+        if (!_suppressionConsumed && event.logicalKey.isSelectKey) {
+          _suppressionConsumed = true;
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: tile,
+    );
+  }
+}
+
+/// A RadioListTile that accepts a FocusNode for keyboard/controller navigation.
+///
+/// Uses Flutter's native RadioListTile focus support - no custom styling wrapper.
+/// Requires a [RadioGroup] ancestor to manage selection state.
+class FocusableRadioListTile<T> extends StatefulWidget {
+  /// The primary content of the list tile.
+  final Widget? title;
+
+  /// Additional content displayed below the title.
+  final Widget? subtitle;
+
+  /// A widget to display on the opposite side from the radio.
+  final Widget? secondary;
+
+  /// The value represented by this radio button.
+  final T value;
+
+  /// Whether this radio button is part of a vertically dense list.
+  final bool dense;
+
+  /// Optional FocusNode for keyboard/controller navigation.
+  final FocusNode? focusNode;
+
+  /// Whether this tile should autofocus when first built.
+  final bool autofocus;
+
+  /// Whether the radio tile is interactive.
+  final bool? enabled;
+
+  /// Visual density for the list tile.
+  final VisualDensity? visualDensity;
+
+  const FocusableRadioListTile({
+    super.key,
+    this.title,
+    this.subtitle,
+    this.secondary,
+    required this.value,
+    this.dense = true,
+    this.focusNode,
+    this.autofocus = false,
+    this.enabled,
+    this.visualDensity = const VisualDensity(vertical: -3),
+  });
+
+  @override
+  State<FocusableRadioListTile<T>> createState() => _FocusableRadioListTileState<T>();
+}
+
+class _FocusableRadioListTileState<T> extends State<FocusableRadioListTile<T>>
+    with FocusableTileStateMixin<FocusableRadioListTile<T>> {
+  @override
+  FocusNode? get widgetFocusNode => widget.focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    initFocusNode();
+  }
+
+  @override
+  void didUpdateWidget(FocusableRadioListTile<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    updateFocusNode(oldWidget.focusNode);
+  }
+
+  @override
+  void dispose() {
+    disposeFocusNode();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ClickableCursor(
+      enabled: widget.enabled ?? true,
+      child: RadioListTile<T>(
+        title: widget.title,
+        subtitle: widget.subtitle,
+        secondary: widget.secondary,
+        value: widget.value,
+        // groupValue and onChanged provided by RadioGroup ancestor
+        dense: widget.dense,
+        visualDensity: widget.visualDensity,
+        focusNode: effectiveFocusNode,
+        autofocus: widget.autofocus,
+        enabled: widget.enabled,
+      ),
+    );
+  }
+}
+
+/// A SwitchListTile that accepts a FocusNode for keyboard/controller navigation.
+///
+/// Uses Flutter's native SwitchListTile focus support - no custom styling wrapper.
+class FocusableSwitchListTile extends StatefulWidget {
+  /// The primary content of the list tile.
+  final Widget? title;
+
+  /// Additional content displayed below the title.
+  final Widget? subtitle;
+
+  /// A widget to display on the opposite side from the switch.
+  final Widget? secondary;
+
+  /// Whether this switch is checked.
+  final bool value;
+
+  /// Called when the user toggles the switch.
+  final ValueChanged<bool>? onChanged;
+
+  /// Whether this switch is part of a vertically dense list.
+  final bool dense;
+
+  /// Optional FocusNode for keyboard/controller navigation.
+  final FocusNode? focusNode;
+
+  /// Whether this tile should autofocus when first built.
+  final bool autofocus;
+
+  /// Visual density for the list tile.
+  final VisualDensity? visualDensity;
+
+  /// Content padding, e.g. to align with sibling rows. Null uses the
+  /// SwitchListTile default.
+  final EdgeInsetsGeometry? contentPadding;
+
+  /// Horizontal gap between the leading/secondary widget and title.
+  final double? horizontalTitleGap;
+
+  /// Minimum width reserved for the leading/secondary widget.
+  final double? minLeadingWidth;
+
+  const FocusableSwitchListTile({
+    super.key,
+    this.title,
+    this.subtitle,
+    this.secondary,
+    required this.value,
+    required this.onChanged,
+    this.dense = true,
+    this.focusNode,
+    this.autofocus = false,
+    this.visualDensity = const VisualDensity(vertical: -3),
+    this.contentPadding,
+    this.horizontalTitleGap,
+    this.minLeadingWidth,
+  });
+
+  @override
+  State<FocusableSwitchListTile> createState() => _FocusableSwitchListTileState();
+}
+
+class _FocusableSwitchListTileState extends State<FocusableSwitchListTile>
+    with FocusableTileStateMixin<FocusableSwitchListTile> {
+  @override
+  FocusNode? get widgetFocusNode => widget.focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    initFocusNode();
+  }
+
+  @override
+  void didUpdateWidget(FocusableSwitchListTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    updateFocusNode(oldWidget.focusNode);
+  }
+
+  @override
+  void dispose() {
+    disposeFocusNode();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ClickableCursor(
+      enabled: widget.onChanged != null,
+      child: SwitchListTile(
+        title: widget.title,
+        subtitle: widget.subtitle,
+        secondary: widget.secondary,
+        value: widget.value,
+        onChanged: widget.onChanged,
+        dense: widget.dense,
+        visualDensity: widget.visualDensity,
+        contentPadding: widget.contentPadding,
+        focusNode: effectiveFocusNode,
+        autofocus: widget.autofocus,
+        horizontalTitleGap: widget.horizontalTitleGap,
+        minLeadingWidth: widget.minLeadingWidth,
+      ),
+    );
+  }
+}

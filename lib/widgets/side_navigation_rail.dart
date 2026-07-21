@@ -1,0 +1,1244 @@
+import 'dart:async';
+import '../media/ids.dart';
+import 'dart:io' show Platform;
+
+import 'package:flutter/material.dart';
+import 'package:plezy/widgets/app_icon.dart';
+import 'package:material_symbols_icons/symbols.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+
+import '../focus/dpad_navigator.dart';
+import '../focus/focus_memory_tracker.dart';
+import '../media/media_library.dart';
+import '../mixins/mounted_set_state_mixin.dart';
+import '../navigation/navigation_tabs.dart';
+import '../providers/hidden_libraries_provider.dart';
+import '../providers/libraries_provider.dart';
+import '../services/settings_service.dart';
+import '../utils/platform_detector.dart';
+import '../utils/scroll_utils.dart';
+import '../utils/library_grouping.dart';
+import '../providers/multi_server_provider.dart';
+import '../services/fullscreen_state_manager.dart';
+import '../theme/mono_tokens.dart';
+import '../widgets/backend_badge.dart';
+import '../i18n/strings.g.dart';
+
+enum _LibraryNavSection { visible, hidden }
+
+sealed class _LibraryNavRow {
+  final _LibraryNavSection section;
+
+  const _LibraryNavRow({required this.section});
+}
+
+final class _LibraryServerHeaderRow extends _LibraryNavRow {
+  final String serverId;
+  final String serverName;
+
+  const _LibraryServerHeaderRow({required super.section, required this.serverId, required this.serverName});
+}
+
+final class _LibraryItemRow extends _LibraryNavRow {
+  final MediaLibrary library;
+  final bool showServerName;
+
+  const _LibraryItemRow({required super.section, required this.library, this.showServerName = false});
+}
+
+/// Reusable navigation rail item widget that handles focus, selection, and interaction
+class NavigationRailItem extends StatelessWidget {
+  final IconData icon;
+  final IconData? selectedIcon;
+  final Widget label;
+  final bool isSelected;
+  final bool isFocused;
+  final bool isCollapsed;
+  final bool useSimpleLayout;
+  final VoidCallback onTap;
+  final FocusNode focusNode;
+  final bool autofocus;
+  final BorderRadius borderRadius;
+  final double iconSize;
+  final double horizontalPadding;
+  final bool suppressSelectedBackground;
+
+  /// Called when RIGHT arrow is pressed to navigate to content area.
+  final VoidCallback? onNavigateRight;
+
+  const NavigationRailItem({
+    super.key,
+    required this.icon,
+    this.selectedIcon,
+    required this.label,
+    required this.isSelected,
+    required this.isFocused,
+    this.isCollapsed = false,
+    this.useSimpleLayout = false,
+    required this.onTap,
+    required this.focusNode,
+    this.autofocus = false,
+    this.borderRadius = const BorderRadius.all(Radius.circular(12)),
+    this.iconSize = 22,
+    this.horizontalPadding = 17,
+    this.suppressSelectedBackground = false,
+    this.onNavigateRight,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = tokens(context);
+    final showSelectedBackground = isSelected && !suppressSelectedBackground;
+
+    return Focus(
+      focusNode: focusNode,
+      autofocus: autofocus,
+      onKeyEvent: (node, event) {
+        if (event is! KeyDownEvent) return KeyEventResult.ignored;
+        if (event.logicalKey.isSelectKey) {
+          onTap();
+          return KeyEventResult.handled;
+        }
+        if (event.logicalKey == LogicalKeyboardKey.arrowRight && onNavigateRight != null) {
+          onNavigateRight!();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          canRequestFocus: false,
+          onTap: onTap,
+          borderRadius: borderRadius,
+          child: Container(
+            decoration: BoxDecoration(
+              color: () {
+                if (isCollapsed) return isFocused ? t.text.withValues(alpha: 0.12) : null;
+                if (isFocused) return t.text.withValues(alpha: showSelectedBackground ? 0.15 : 0.12);
+                if (showSelectedBackground) return t.text.withValues(alpha: 0.1);
+                return null;
+              }(),
+              borderRadius: borderRadius,
+            ),
+            clipBehavior: Clip.hardEdge,
+            child: UnconstrainedBox(
+              alignment: .centerLeft,
+              constrainedAxis: Axis.vertical,
+              clipBehavior: Clip.hardEdge,
+              child: SizedBox(
+                width: SideNavigationRailState.expandedWidth - 24,
+                child: Padding(
+                  padding: .symmetric(vertical: 12, horizontal: horizontalPadding),
+                  child: Row(
+                    children: [
+                      AppIcon(
+                        isSelected && selectedIcon != null ? selectedIcon! : icon,
+                        fill: 1,
+                        size: iconSize,
+                        color: isSelected ? t.text : t.textMuted,
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: () {
+                          if (useSimpleLayout) return label;
+                          final opacity = isCollapsed ? 0.0 : 1.0;
+                          return AnimatedOpacity(opacity: opacity, duration: t.fast, child: label);
+                        }(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Side navigation rail for Desktop and Android TV platforms
+class SideNavigationRail extends StatefulWidget {
+  final NavigationTabId selectedTab;
+  final String? selectedLibraryKey;
+  final bool isOfflineMode;
+  final bool isSidebarFocused;
+  final bool alwaysExpanded;
+  final bool isReconnecting;
+  final ValueChanged<NavigationTabId> onDestinationSelected;
+  final ValueChanged<String> onLibrarySelected;
+
+  /// Called when RIGHT arrow is pressed to navigate to content without selecting.
+  final VoidCallback? onNavigateToContent;
+
+  /// Called when hover/touch expansion changes, so the shell can reserve width.
+  final ValueChanged<bool>? onInteractionExpandedChanged;
+
+  /// Called when the user taps the reconnect button in offline mode.
+  final VoidCallback? onReconnect;
+
+  const SideNavigationRail({
+    super.key,
+    required this.selectedTab,
+    this.selectedLibraryKey,
+    this.isOfflineMode = false,
+    this.isSidebarFocused = false,
+    this.alwaysExpanded = false,
+    this.isReconnecting = false,
+    required this.onDestinationSelected,
+    required this.onLibrarySelected,
+    this.onNavigateToContent,
+    this.onInteractionExpandedChanged,
+    this.onReconnect,
+  });
+
+  @override
+  State<SideNavigationRail> createState() => SideNavigationRailState();
+}
+
+class SideNavigationRailState extends State<SideNavigationRail> with MountedSetStateMixin {
+  bool _librariesExpanded = true;
+
+  bool _isHovered = false;
+  bool _isTouchExpanded = false;
+  bool _lastReportedInteractionExpanded = false;
+  Timer? _collapseTimer;
+  static const double collapsedWidth = 80.0;
+  static const double tvCollapsedWidth = 48.0;
+  static const double expandedWidth = 220.0;
+  static const double _horizontalPadding = 12.0;
+  static const double _itemHorizontalPadding = 17.0;
+  static const double _defaultIconSize = 22.0;
+  static const Duration _collapseDelay = Duration(milliseconds: 150);
+
+  static double collapsedWidthForContext(BuildContext _) => PlatformDetector.isTV() ? tvCollapsedWidth : collapsedWidth;
+
+  static double itemHorizontalPaddingForContext(BuildContext context, {required bool isCollapsed}) {
+    if (isCollapsed && PlatformDetector.isTV()) {
+      return ((tvCollapsedWidth - _defaultIconSize) / 2).clamp(0.0, _itemHorizontalPadding).toDouble();
+    }
+    return _itemHorizontalPadding;
+  }
+
+  static double horizontalPaddingForContext(BuildContext context, {required bool isCollapsed}) {
+    if (!isCollapsed) return _horizontalPadding;
+    final centeredPadding =
+        ((collapsedWidthForContext(context) - _defaultIconSize) / 2) -
+        itemHorizontalPaddingForContext(context, isCollapsed: isCollapsed);
+    return centeredPadding.clamp(0.0, _horizontalPadding).toDouble();
+  }
+
+  static const _kHome = 'home';
+  static const _kLibraries = 'libraries';
+  static const _kSearch = 'search';
+  static const _kDownloads = 'downloads';
+  static const _kSettings = 'settings';
+  static const _kReconnect = 'reconnect';
+  static const _kFullscreen = 'fullscreen';
+  static const _kHiddenLibraries = 'hiddenLibraries';
+  static const _kServerHeaderPrefix = 'serverHeader';
+  static const _kLibraryItemPrefix = 'library';
+
+  bool _hiddenLibrariesExpanded = false;
+  final Set<String> _collapsedServerGroupKeys = {};
+
+  // Unified focus state tracker for all nav items (main + libraries)
+  late final FocusMemoryTracker _focusTracker;
+
+  /// Whether the sidebar should be expanded (always, hover, or focus)
+  bool get _shouldExpand => widget.alwaysExpanded || _isHovered || _isTouchExpanded || widget.isSidebarFocused;
+
+  bool get _interactionExpanded => _isHovered || _isTouchExpanded;
+
+  bool get _showDownloads => !PlatformDetector.isAppleTV();
+
+  /// macOS has the system green button; mobile/TV have no OS fullscreen toggle.
+  bool get _showFullscreenToggle => Platform.isWindows || Platform.isLinux;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusTracker = FocusMemoryTracker(
+      onFocusChanged: () {
+        // ignore: no-empty-block - setState triggers rebuild to update focus styling
+        setStateIfMounted(() {});
+      },
+      debugLabelPrefix: 'nav',
+    );
+  }
+
+  @override
+  void dispose() {
+    _collapseTimer?.cancel();
+    _focusTracker.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant SideNavigationRail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Auto-collapse after navigation (selection changed)
+    if (oldWidget.selectedTab != widget.selectedTab || oldWidget.selectedLibraryKey != widget.selectedLibraryKey) {
+      final wasInteractionExpanded = _interactionExpanded;
+      _isTouchExpanded = false;
+      if (wasInteractionExpanded != _interactionExpanded) {
+        _scheduleInteractionExpandedNotification();
+      }
+    }
+  }
+
+  void _scheduleInteractionExpandedNotification() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _notifyInteractionExpandedIfNeeded();
+    });
+  }
+
+  void _notifyInteractionExpandedIfNeeded() {
+    final expanded = _interactionExpanded;
+    if (_lastReportedInteractionExpanded == expanded) return;
+    _lastReportedInteractionExpanded = expanded;
+    widget.onInteractionExpandedChanged?.call(expanded);
+  }
+
+  void _onHoverEnter() {
+    _collapseTimer?.cancel();
+    if (_isHovered && !_isTouchExpanded) return;
+    setState(() {
+      _isTouchExpanded = false; // Mouse takes over
+      _isHovered = true;
+    });
+    _notifyInteractionExpandedIfNeeded();
+  }
+
+  void _onHoverExit() {
+    _collapseTimer?.cancel();
+    _collapseTimer = Timer(_collapseDelay, () {
+      if (mounted && _isHovered) {
+        setState(() => _isHovered = false);
+        _notifyInteractionExpandedIfNeeded();
+      }
+    });
+  }
+
+  void _expandForTouch() {
+    if (_isTouchExpanded) return;
+    setState(() => _isTouchExpanded = true);
+    _notifyInteractionExpandedIfNeeded();
+  }
+
+  /// The key of the last focused sidebar item (for pre-capture before focus shifts).
+  String? get lastFocusedKey => _focusTracker.lastFocusedKey;
+
+  /// Focus the last focused nav item, or Home as fallback.
+  /// If [targetKey] is provided, try it first (used when the caller captured
+  /// the intended target before a focus-scope switch overwrote it).
+  void focusActiveItem({String? targetKey}) {
+    final node = _resolveFocusNode(targetKey) ?? _mountedFocusNodeFor(_kHome);
+    if (node == null) return;
+    _requestFocusAndReveal(node);
+  }
+
+  /// Resolve the best mounted focus node in priority order:
+  /// 1. Explicit [targetKey] (captured before scope switch)
+  /// 2. Last focused key still in the tracker
+  /// 3. Currently selected navigation item (tab / library)
+  /// 4. Home fallback
+  FocusNode? _resolveFocusNode(String? targetKey) {
+    return _mountedFocusNodeFor(targetKey) ??
+        _mountedFocusNodeFor(_focusTracker.lastFocusedKey) ??
+        _mountedFocusNodeFor(_resolveSelectedFocusKey());
+  }
+
+  FocusNode? _mountedFocusNodeFor(String? key) {
+    if (key == null) return null;
+    final node = _focusTracker.nodeFor(key);
+    return node?.context == null ? null : node;
+  }
+
+  /// Derive a focus key from the current selection state (tab + library).
+  /// Returns null if no meaningful selected item exists.
+  String? _resolveSelectedFocusKey() {
+    switch (widget.selectedTab) {
+      case NavigationTabId.discover:
+        return _kHome;
+      case NavigationTabId.libraries:
+        final libKey = widget.selectedLibraryKey;
+        if (libKey != null && _librariesExpanded) {
+          final visibleKey = '$_kLibraryItemPrefix:${_LibraryNavSection.visible.name}:$libKey';
+          if (_mountedFocusNodeFor(visibleKey) != null) return visibleKey;
+          if (_hiddenLibrariesExpanded) {
+            final hiddenKey = '$_kLibraryItemPrefix:${_LibraryNavSection.hidden.name}:$libKey';
+            if (_mountedFocusNodeFor(hiddenKey) != null) return hiddenKey;
+          }
+        }
+        return _kLibraries;
+      case NavigationTabId.search:
+        return _kSearch;
+      case NavigationTabId.downloads:
+        return _showDownloads ? _kDownloads : null;
+      case NavigationTabId.settings:
+        return _kSettings;
+      case NavigationTabId.liveTv:
+        return 'liveTv';
+    }
+  }
+
+  /// Request focus on [node] and scroll it into view after the next frame.
+  void _requestFocusAndReveal(FocusNode node) {
+    node.requestFocus();
+    scrollContextToCenter(node.context);
+  }
+
+  String _serverHeaderFocusKey(_LibraryNavSection section, ServerId serverId) =>
+      '$_kServerHeaderPrefix:${section.name}:$serverId';
+
+  String _libraryItemFocusKey(_LibraryNavSection section, MediaLibrary library) =>
+      '$_kLibraryItemPrefix:${section.name}:${library.globalKey}';
+
+  String _serverGroupStateKey(_LibraryNavSection section, ServerId serverId) => '${section.name}:$serverId';
+
+  String _focusKeyForLibraryRow(_LibraryNavRow row) => switch (row) {
+    _LibraryServerHeaderRow(:final section, :final serverId) => _serverHeaderFocusKey(section, ServerId(serverId)),
+    _LibraryItemRow(:final section, :final library) => _libraryItemFocusKey(section, library),
+  };
+
+  Iterable<String> _focusKeysForLibraryRows(List<_LibraryNavRow> rows) => rows.map(_focusKeyForLibraryRow);
+
+  /// Build the set of valid focus keys (main nav + currently rendered library rows).
+  Set<String> _buildValidFocusKeys({
+    required List<_LibraryNavRow> visibleRows,
+    required List<_LibraryNavRow> hiddenRows,
+    required bool hasHiddenLibraries,
+    required bool hasLiveTv,
+  }) {
+    return {
+      _kHome,
+      _kLibraries,
+      _kSearch,
+      if (_showDownloads) _kDownloads,
+      _kSettings,
+      _kReconnect,
+      if (hasHiddenLibraries) _kHiddenLibraries,
+      if (_showFullscreenToggle) _kFullscreen,
+      if (hasLiveTv) 'liveTv',
+      ..._focusKeysForLibraryRows(visibleRows),
+      if (_hiddenLibrariesExpanded) ..._focusKeysForLibraryRows(hiddenRows),
+    };
+  }
+
+  /// Build rendered rows inside one library section. This is the single source
+  /// of truth for both widget rendering and D-pad focus ordering.
+  List<_LibraryNavRow> _buildLibraryRows(
+    List<MediaLibrary> libs, {
+    required _LibraryNavSection section,
+    required bool showServerHeaders,
+  }) {
+    if (!showServerHeaders) {
+      final nonUniqueNames = _getNonUniqueLibraryNames(libs);
+      return libs.map((lib) {
+        return _LibraryItemRow(
+          section: section,
+          library: lib,
+          showServerName: nonUniqueNames.contains(lib.title) && lib.serverName != null,
+        );
+      }).toList();
+    }
+    final grouped = groupLibrariesByFirstAppearance(libs);
+    final result = <_LibraryNavRow>[];
+    for (final serverKey in grouped.serverOrder) {
+      final bucket = grouped.byServer[serverKey]!;
+      if (serverKey.isNotEmpty) {
+        result.add(
+          _LibraryServerHeaderRow(
+            section: section,
+            serverId: serverKey,
+            serverName: bucket.first.serverName ?? serverKey,
+          ),
+        );
+      }
+      if (serverKey.isEmpty ||
+          !_collapsedServerGroupKeys.contains(_serverGroupStateKey(section, ServerId(serverKey)))) {
+        for (final lib in bucket) {
+          result.add(_LibraryItemRow(section: section, library: lib));
+        }
+      }
+    }
+    return result;
+  }
+
+  Set<String> _buildServerGroupStateKeys(
+    List<MediaLibrary> visibleLibraries,
+    List<MediaLibrary> hiddenLibraries, {
+    required bool showServerHeaders,
+  }) {
+    if (!showServerHeaders) return {};
+
+    return {
+      for (final lib in visibleLibraries)
+        if (lib.serverId != null) _serverGroupStateKey(_LibraryNavSection.visible, ServerId(lib.serverId!)),
+      for (final lib in hiddenLibraries)
+        if (lib.serverId != null) _serverGroupStateKey(_LibraryNavSection.hidden, ServerId(lib.serverId!)),
+    };
+  }
+
+  /// Ordered list of focusable keys matching visual top-to-bottom order.
+  List<String> _buildFocusOrder(
+    List<_LibraryNavRow> visibleRows,
+    List<_LibraryNavRow> hiddenRows, {
+    required bool hasHiddenLibraries,
+    required bool hasLiveTv,
+  }) {
+    return [
+      if (widget.isOfflineMode && widget.onReconnect != null) _kReconnect,
+      if (!widget.isOfflineMode) ...[
+        _kHome,
+        _kLibraries,
+        if (_librariesExpanded) ...[
+          ..._focusKeysForLibraryRows(visibleRows),
+          if (hasHiddenLibraries) ...[
+            _kHiddenLibraries,
+            if (_hiddenLibrariesExpanded) ..._focusKeysForLibraryRows(hiddenRows),
+          ],
+        ],
+        if (hasLiveTv) 'liveTv',
+        _kSearch,
+      ],
+      if (_showDownloads) _kDownloads,
+      _kSettings,
+      if (_showFullscreenToggle) _kFullscreen,
+    ];
+  }
+
+  void _debugAssertUniqueFocusOrder(List<String> focusOrder) {
+    assert(() {
+      final seen = <String>{};
+      for (final key in focusOrder) {
+        if (!seen.add(key)) {
+          throw FlutterError('SideNavigationRail focus order contains duplicate key: $key');
+        }
+      }
+      return true;
+    }());
+  }
+
+  /// Handle D-pad UP/DOWN by explicitly moving focus to the next/previous item.
+  KeyEventResult _handleVerticalNavigation(FocusNode _, KeyEvent event, List<String> focusOrder) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+
+    final isDown = event.logicalKey == LogicalKeyboardKey.arrowDown;
+    final isUp = event.logicalKey == LogicalKeyboardKey.arrowUp;
+    if (!isDown && !isUp) return KeyEventResult.ignored;
+
+    final currentKey = _focusTracker.lastFocusedKey;
+    if (currentKey == null) return KeyEventResult.ignored;
+
+    final currentIndex = focusOrder.indexOf(currentKey);
+    if (currentIndex == -1) return KeyEventResult.ignored;
+
+    final nextIndex = isDown ? currentIndex + 1 : currentIndex - 1;
+    if (nextIndex < 0 || nextIndex >= focusOrder.length) return KeyEventResult.handled;
+
+    final nextNode = _focusTracker.nodeFor(focusOrder[nextIndex]);
+    if (nextNode == null) return KeyEventResult.ignored;
+
+    _requestFocusAndReveal(nextNode);
+    return KeyEventResult.handled;
+  }
+
+  /// Collapse the sidebar (resets touch-expand state).
+  void collapse() {
+    if (_isTouchExpanded) {
+      setState(() => _isTouchExpanded = false);
+      _notifyInteractionExpandedIfNeeded();
+    }
+  }
+
+  /// Reload libraries (called when servers change or profile switches)
+  void reloadLibraries() {
+    final librariesProvider = context.read<LibrariesProvider>();
+    librariesProvider.refresh();
+  }
+
+  IconData _getLibraryIcon(String type) {
+    switch (type.toLowerCase()) {
+      case 'movie':
+        return Symbols.movie_rounded;
+      case 'show':
+        return Symbols.tv_rounded;
+      case 'artist':
+        return Symbols.music_note_rounded;
+      case 'photo':
+        return Symbols.photo_rounded;
+      case 'mixed':
+        return Symbols.share_rounded;
+      default:
+        return Symbols.folder_rounded;
+    }
+  }
+
+  /// Calculate top padding for macOS traffic lights
+  double _getTopPadding(BuildContext context) {
+    double basePadding = MediaQuery.paddingOf(context).top + 16;
+
+    // On macOS, add extra padding for traffic lights (when not fullscreen)
+    if (Platform.isMacOS) {
+      final isFullscreen = FullscreenStateManager().isFullscreen;
+      if (!isFullscreen) {
+        // Traffic lights area is approximately 52 pixels high
+        basePadding = basePadding < 52 ? 52 : basePadding;
+      }
+    }
+
+    return basePadding;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = tokens(context);
+    final librariesProvider = context.watch<LibrariesProvider>();
+    final hiddenLibrariesProvider = context.watch<HiddenLibrariesProvider>();
+    final hiddenKeys = hiddenLibrariesProvider.hiddenLibraryKeys;
+
+    final allLibraries = librariesProvider.libraries;
+    final visibleLibraries = <MediaLibrary>[];
+    final hiddenLibraries = <MediaLibrary>[];
+    final serverIds = <String>{};
+    for (final lib in allLibraries) {
+      if (lib.serverId != null) serverIds.add(lib.serverId!);
+      if (hiddenKeys.contains(lib.globalKey)) {
+        hiddenLibraries.add(lib);
+      } else {
+        visibleLibraries.add(lib);
+      }
+    }
+
+    final isCollapsed = !_shouldExpand;
+    final effectiveCollapsedWidth = collapsedWidthForContext(context);
+    final horizontalPadding = horizontalPaddingForContext(context, isCollapsed: isCollapsed);
+    final itemHorizontalPadding = itemHorizontalPaddingForContext(context, isCollapsed: isCollapsed);
+    final hasLiveTv = context.watch<MultiServerProvider>().hasLiveTv;
+
+    // Listen to fullscreen + groupLibrariesByServer setting so the rail
+    // rebuilds when the user toggles "Group libraries by server" in Appearance.
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        FullscreenStateManager(),
+        SettingsService.instance.listenable(SettingsService.groupLibrariesByServer),
+      ]),
+      builder: (context, _) {
+        // Server grouping: only when multi-server AND the user-facing toggle is on.
+        final groupByServerSetting = SettingsService.instance.read(SettingsService.groupLibrariesByServer);
+        final showServerHeaders = serverIds.length > 1 && groupByServerSetting;
+        _collapsedServerGroupKeys.retainAll(
+          _buildServerGroupStateKeys(visibleLibraries, hiddenLibraries, showServerHeaders: showServerHeaders),
+        );
+        final visibleRows = _buildLibraryRows(
+          visibleLibraries,
+          section: _LibraryNavSection.visible,
+          showServerHeaders: showServerHeaders,
+        );
+        final hiddenRows = _buildLibraryRows(
+          hiddenLibraries,
+          section: _LibraryNavSection.hidden,
+          showServerHeaders: showServerHeaders,
+        );
+        _focusTracker.pruneExcept(
+          _buildValidFocusKeys(
+            visibleRows: visibleRows,
+            hiddenRows: hiddenRows,
+            hasHiddenLibraries: hiddenLibraries.isNotEmpty,
+            hasLiveTv: hasLiveTv,
+          ),
+        );
+        final focusOrder = _buildFocusOrder(
+          visibleRows,
+          hiddenRows,
+          hasHiddenLibraries: hiddenLibraries.isNotEmpty,
+          hasLiveTv: hasLiveTv,
+        );
+        _debugAssertUniqueFocusOrder(focusOrder);
+        return TapRegion(
+          onTapOutside: (_) {
+            if (_isTouchExpanded) {
+              setState(() => _isTouchExpanded = false);
+              _notifyInteractionExpandedIfNeeded();
+            }
+          },
+          child: MouseRegion(
+            cursor: isCollapsed ? SystemMouseCursors.click : MouseCursor.defer,
+            onEnter: (_) => _onHoverEnter(),
+            onExit: (_) => _onHoverExit(),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: isCollapsed ? _expandForTouch : null,
+              child: AnimatedContainer(
+                duration: t.normal,
+                curve: Curves.easeOutCubic,
+                width: isCollapsed ? effectiveCollapsedWidth : expandedWidth,
+                clipBehavior: Clip.hardEdge,
+                decoration: const BoxDecoration(),
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: AnimatedOpacity(
+                        opacity: PlatformDetector.isTV() ? 0.0 : 1.0,
+                        duration: t.normal,
+                        curve: Curves.easeOutCubic,
+                        child: ColoredBox(color: t.surface),
+                      ),
+                    ),
+                    IgnorePointer(
+                      ignoring: isCollapsed,
+                      child: Focus(
+                        canRequestFocus: false,
+                        skipTraversal: true,
+                        onKeyEvent: (node, event) => _handleVerticalNavigation(node, event, focusOrder),
+                        child: Column(
+                          children: [
+                            SizedBox(height: _getTopPadding(context)),
+                            Expanded(
+                              child: ListView(
+                                padding: .symmetric(horizontal: horizontalPadding),
+                                clipBehavior: Clip.hardEdge,
+                                children: [
+                                  if (widget.isOfflineMode && widget.onReconnect != null) ...[
+                                    _buildReconnectItem(isCollapsed: isCollapsed),
+                                    const SizedBox(height: 8),
+                                  ],
+                                  if (!widget.isOfflineMode) ...[
+                                    _buildNavItem(
+                                      icon: Symbols.home_rounded,
+                                      selectedIcon: Symbols.home_rounded,
+                                      label: Translations.of(context).common.home,
+                                      isSelected: widget.selectedTab == NavigationTabId.discover,
+                                      isFocused: _focusTracker.isFocused(_kHome),
+                                      onTap: () => widget.onDestinationSelected(NavigationTabId.discover),
+                                      focusNode: _focusTracker.get(_kHome),
+                                      isCollapsed: isCollapsed,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _buildLibrariesSection(
+                                      visibleRows,
+                                      hiddenRows,
+                                      hiddenLibraries.length,
+                                      t,
+                                      isCollapsed: isCollapsed,
+                                      itemHorizontalPadding: itemHorizontalPadding,
+                                    ),
+                                    const SizedBox(height: 8),
+                                    if (context.watch<MultiServerProvider>().hasLiveTv) ...[
+                                      _buildNavItem(
+                                        icon: Symbols.live_tv_rounded,
+                                        selectedIcon: Symbols.live_tv_rounded,
+                                        label: Translations.of(context).navigation.liveTv,
+                                        isSelected: widget.selectedTab == NavigationTabId.liveTv,
+                                        isFocused: _focusTracker.isFocused('liveTv'),
+                                        onTap: () => widget.onDestinationSelected(NavigationTabId.liveTv),
+                                        focusNode: _focusTracker.get('liveTv'),
+                                        isCollapsed: isCollapsed,
+                                      ),
+                                      const SizedBox(height: 8),
+                                    ],
+
+                                    _buildNavItem(
+                                      icon: Symbols.search_rounded,
+                                      selectedIcon: Symbols.search_rounded,
+                                      label: Translations.of(context).common.search,
+                                      isSelected: widget.selectedTab == NavigationTabId.search,
+                                      isFocused: _focusTracker.isFocused(_kSearch),
+                                      onTap: () => widget.onDestinationSelected(NavigationTabId.search),
+                                      focusNode: _focusTracker.get(_kSearch),
+                                      isCollapsed: isCollapsed,
+                                    ),
+                                    const SizedBox(height: 8),
+                                  ],
+                                  // Downloads (hidden on Apple TV — no user
+                                  // file storage)
+                                  if (_showDownloads) ...[
+                                    _buildNavItem(
+                                      icon: Symbols.download_rounded,
+                                      selectedIcon: Symbols.download_rounded,
+                                      label: Translations.of(context).navigation.downloads,
+                                      isSelected: widget.selectedTab == NavigationTabId.downloads,
+                                      isFocused: _focusTracker.isFocused(_kDownloads),
+                                      onTap: () => widget.onDestinationSelected(NavigationTabId.downloads),
+                                      focusNode: _focusTracker.get(_kDownloads),
+                                      isCollapsed: isCollapsed,
+                                    ),
+                                    const SizedBox(height: 8),
+                                  ],
+                                  _buildNavItem(
+                                    icon: Symbols.settings_rounded,
+                                    selectedIcon: Symbols.settings_rounded,
+                                    label: Translations.of(context).common.settings,
+                                    isSelected: widget.selectedTab == NavigationTabId.settings,
+                                    isFocused: _focusTracker.isFocused(_kSettings),
+                                    onTap: () => widget.onDestinationSelected(NavigationTabId.settings),
+                                    focusNode: _focusTracker.get(_kSettings),
+                                    isCollapsed: isCollapsed,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (_showFullscreenToggle)
+                              Padding(
+                                padding: .fromLTRB(horizontalPadding, 0, horizontalPadding, 12),
+                                child: _buildFullscreenItem(isCollapsed: isCollapsed),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildNavItem({
+    required IconData icon,
+    required IconData selectedIcon,
+    required String label,
+    required bool isSelected,
+    required bool isFocused,
+    required VoidCallback onTap,
+    required FocusNode focusNode,
+    required bool isCollapsed,
+    bool autofocus = false,
+  }) {
+    final t = tokens(context);
+    final itemHorizontalPadding = itemHorizontalPaddingForContext(context, isCollapsed: isCollapsed);
+
+    return NavigationRailItem(
+      icon: icon,
+      selectedIcon: selectedIcon,
+      label: Text(
+        label,
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+          color: isSelected ? t.text : t.textMuted,
+        ),
+        overflow: .ellipsis,
+        maxLines: 1,
+      ),
+      isSelected: isSelected,
+      isFocused: isFocused,
+      isCollapsed: isCollapsed,
+      onTap: onTap,
+      focusNode: focusNode,
+      autofocus: autofocus,
+      horizontalPadding: itemHorizontalPadding,
+      suppressSelectedBackground: widget.isSidebarFocused,
+      onNavigateRight: widget.onNavigateToContent,
+    );
+  }
+
+  Widget _buildReconnectItem({required bool isCollapsed}) {
+    final t = tokens(context);
+    final isFocused = _focusTracker.isFocused(_kReconnect);
+    final itemHorizontalPadding = itemHorizontalPaddingForContext(context, isCollapsed: isCollapsed);
+
+    return NavigationRailItem(
+      icon: widget.isReconnecting ? Symbols.sync_rounded : Symbols.wifi_rounded,
+      label: widget.isReconnecting
+          ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: t.text))
+          : Text(
+              Translations.of(context).common.reconnect,
+              style: TextStyle(fontSize: 14, fontWeight: .w400, color: t.textMuted),
+              overflow: .ellipsis,
+              maxLines: 1,
+            ),
+      isSelected: false,
+      isFocused: isFocused,
+      isCollapsed: isCollapsed,
+      // ignore: no-empty-block - no-op tap handler while reconnecting
+      onTap: widget.isReconnecting ? () {} : () => widget.onReconnect?.call(),
+      focusNode: _focusTracker.get(_kReconnect),
+      horizontalPadding: itemHorizontalPadding,
+      onNavigateRight: widget.onNavigateToContent,
+    );
+  }
+
+  Widget _buildFullscreenItem({required bool isCollapsed}) {
+    final t = tokens(context);
+    final isFullscreen = FullscreenStateManager().isFullscreen;
+    final isFocused = _focusTracker.isFocused(_kFullscreen);
+    final itemHorizontalPadding = itemHorizontalPaddingForContext(context, isCollapsed: isCollapsed);
+
+    return NavigationRailItem(
+      icon: isFullscreen ? Symbols.fullscreen_exit_rounded : Symbols.fullscreen_rounded,
+      label: Text(
+        isFullscreen ? Translations.of(context).common.exitFullscreen : Translations.of(context).common.fullscreen,
+        style: TextStyle(fontSize: 14, fontWeight: .w400, color: t.textMuted),
+        overflow: .ellipsis,
+        maxLines: 1,
+      ),
+      isSelected: false,
+      isFocused: isFocused,
+      isCollapsed: isCollapsed,
+      onTap: () => unawaited(FullscreenStateManager().toggleFullscreen()),
+      focusNode: _focusTracker.get(_kFullscreen),
+      horizontalPadding: itemHorizontalPadding,
+      onNavigateRight: widget.onNavigateToContent,
+    );
+  }
+
+  Widget _buildLibrariesSection(
+    List<_LibraryNavRow> visibleRows,
+    List<_LibraryNavRow> hiddenRows,
+    int hiddenLibraryCount,
+    dynamic t, {
+    bool isCollapsed = false,
+    required double itemHorizontalPadding,
+  }) {
+    final librariesProvider = context.watch<LibrariesProvider>();
+    final isLoading = librariesProvider.isLoading;
+    final isLibrariesSelected = widget.selectedTab == NavigationTabId.libraries && widget.selectedLibraryKey == null;
+    final isLibrariesFocused = _focusTracker.isFocused(_kLibraries);
+    final showLibrariesSelectedBackground = isLibrariesSelected && !widget.isSidebarFocused;
+    final allEmpty = visibleRows.isEmpty && hiddenLibraryCount == 0;
+
+    return Column(
+      crossAxisAlignment: .start,
+      children: [
+        Focus(
+          focusNode: _focusTracker.get(_kLibraries),
+          onKeyEvent: (node, event) {
+            if (event is! KeyDownEvent) return KeyEventResult.ignored;
+            if (event.logicalKey.isSelectKey) {
+              setState(() {
+                _librariesExpanded = !_librariesExpanded;
+              });
+              return KeyEventResult.handled;
+            }
+            // RIGHT arrow navigates to content area
+            if (event.logicalKey == LogicalKeyboardKey.arrowRight && widget.onNavigateToContent != null) {
+              widget.onNavigateToContent!();
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              canRequestFocus: false,
+              onTap: () {
+                setState(() {
+                  _librariesExpanded = !_librariesExpanded;
+                });
+              },
+              borderRadius: BorderRadius.circular(tokens(context).radiusMd),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: () {
+                    if (isCollapsed) return isLibrariesFocused ? t.text.withValues(alpha: 0.08) : null;
+                    if (showLibrariesSelectedBackground) return t.text.withValues(alpha: 0.1);
+                    if (isLibrariesFocused) return t.text.withValues(alpha: 0.08);
+                    return null;
+                  }(),
+                  borderRadius: BorderRadius.circular(tokens(context).radiusMd),
+                ),
+                clipBehavior: Clip.hardEdge,
+                child: UnconstrainedBox(
+                  alignment: .centerLeft,
+                  constrainedAxis: Axis.vertical,
+                  clipBehavior: Clip.hardEdge,
+                  child: SizedBox(
+                    width: expandedWidth - 24,
+                    child: Padding(
+                      padding: .symmetric(vertical: 12, horizontal: itemHorizontalPadding),
+                      child: Row(
+                        children: [
+                          AppIcon(
+                            Symbols.video_library_rounded,
+                            fill: 1,
+                            size: 22,
+                            color: widget.selectedTab == NavigationTabId.libraries ? t.text : t.textMuted,
+                          ),
+                          const SizedBox(width: 11),
+                          Expanded(
+                            child: AnimatedOpacity(
+                              opacity: isCollapsed ? 0.0 : 1.0,
+                              duration: tokens(context).fast,
+                              child: Text(
+                                Translations.of(context).navigation.libraries,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: widget.selectedTab == NavigationTabId.libraries
+                                      ? FontWeight.w600
+                                      : FontWeight.w400,
+                                  color: widget.selectedTab == NavigationTabId.libraries ? t.text : t.textMuted,
+                                ),
+                              ),
+                            ),
+                          ),
+                          AnimatedOpacity(
+                            opacity: isCollapsed ? 0.0 : 1.0,
+                            duration: tokens(context).fast,
+                            child: AppIcon(
+                              _librariesExpanded ? Symbols.expand_less_rounded : Symbols.expand_more_rounded,
+                              fill: 1,
+                              size: 20,
+                              color: t.textMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        TweenAnimationBuilder<double>(
+          tween: Tween(end: (_librariesExpanded && !isCollapsed) ? 1.0 : 0.0),
+          duration: tokens(context).normal,
+          curve: Curves.easeOutCubic,
+          builder: (context, value, child) {
+            return ClipRect(
+              child: Align(alignment: .topCenter, heightFactor: value, child: child),
+            );
+          },
+          child: ExcludeFocus(
+            excluding: !_librariesExpanded || isCollapsed,
+            child: Column(
+              mainAxisSize: .min,
+              crossAxisAlignment: .start,
+              children: [
+                const SizedBox(height: 4),
+                if (isLoading)
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: t.textMuted),
+                      ),
+                    ),
+                  )
+                else if (allEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      Translations.of(context).libraries.noLibrariesFound,
+                      style: TextStyle(fontSize: 12, color: t.textMuted),
+                    ),
+                  )
+                else ...[
+                  if (visibleRows.isNotEmpty) _buildLibraryGroupedColumn(visibleRows, t),
+                  if (hiddenLibraryCount > 0) ...[
+                    _buildHiddenLibrariesHeader(hiddenLibraryCount, t),
+                    if (_hiddenLibrariesExpanded) _buildLibraryGroupedColumn(hiddenRows, t),
+                  ],
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Get set of library names that appear more than once (not globally unique)
+  Set<String> _getNonUniqueLibraryNames(List<MediaLibrary> libraries) {
+    final nameCounts = <String, int>{};
+    for (final lib in libraries) {
+      nameCounts[lib.title] = (nameCounts[lib.title] ?? 0) + 1;
+    }
+    return nameCounts.entries.where((e) => e.value > 1).map((e) => e.key).toSet();
+  }
+
+  Widget _buildLibraryGroupedColumn(List<_LibraryNavRow> rows, dynamic t) {
+    return Column(
+      crossAxisAlignment: .start,
+      children: rows.map((row) {
+        return switch (row) {
+          _LibraryServerHeaderRow(:final section, :final serverId, :final serverName) => _buildServerHeader(
+            section,
+            ServerId(serverId),
+            serverName,
+            t,
+          ),
+          _LibraryItemRow(:final section, :final library, :final showServerName) => _buildLibraryItem(
+            section,
+            library,
+            t,
+            showServerName: showServerName,
+          ),
+        };
+      }).toList(),
+    );
+  }
+
+  Widget _buildServerHeader(_LibraryNavSection section, ServerId serverId, String serverName, dynamic t) {
+    // Resolve backend per server so the badge matches the brand. Falls back
+    // to the generic `dns` icon if the client isn't registered yet (rare —
+    // can happen during a profile switch before the manager rehydrates).
+    final backend = context.read<MultiServerProvider>().serverManager.getClient(serverId)?.backend;
+    return _buildCollapsibleHeader(
+      focusKey: _serverHeaderFocusKey(section, serverId),
+      icon: Symbols.dns_rounded,
+      iconSize: 14,
+      leading: backend == null ? null : BackendBadge(backend: backend, size: 14, color: t.textMuted),
+      label: serverName,
+      labelStyle: TextStyle(fontSize: 11, fontWeight: .w600, letterSpacing: 0.4, color: t.textMuted),
+      verticalPadding: 6,
+      isExpanded: !_collapsedServerGroupKeys.contains(_serverGroupStateKey(section, serverId)),
+      onToggle: () => _toggleServerCollapse(section, serverId),
+      t: t,
+    );
+  }
+
+  void _toggleServerCollapse(_LibraryNavSection section, ServerId serverId) {
+    final groupKey = _serverGroupStateKey(section, serverId);
+    setState(() {
+      if (!_collapsedServerGroupKeys.add(groupKey)) {
+        _collapsedServerGroupKeys.remove(groupKey);
+      }
+    });
+  }
+
+  Widget _buildHiddenLibrariesHeader(int count, dynamic t) {
+    return _buildCollapsibleHeader(
+      focusKey: _kHiddenLibraries,
+      icon: Symbols.visibility_off_rounded,
+      iconSize: 16,
+      label: Translations.of(context).libraries.hiddenLibrariesCount(count: count),
+      labelStyle: TextStyle(fontSize: 12, fontWeight: .w500, color: t.textMuted),
+      verticalPadding: 8,
+      isExpanded: _hiddenLibrariesExpanded,
+      onToggle: () => setState(() => _hiddenLibrariesExpanded = !_hiddenLibrariesExpanded),
+      t: t,
+    );
+  }
+
+  Widget _buildCollapsibleHeader({
+    required String focusKey,
+    required IconData icon,
+    required double iconSize,
+    Widget? leading,
+    required String label,
+    required TextStyle labelStyle,
+    required double verticalPadding,
+    required bool isExpanded,
+    required VoidCallback onToggle,
+    required dynamic t,
+  }) {
+    final isFocused = _focusTracker.isFocused(focusKey);
+    final radius = BorderRadius.circular(tokens(context).radiusSm);
+    // Match library-item indent: outer Padding(left: 12) + inner horizontal 17.
+    return Padding(
+      padding: const EdgeInsets.only(left: 12),
+      child: Focus(
+        focusNode: _focusTracker.get(focusKey),
+        onKeyEvent: (node, event) {
+          if (event is! KeyDownEvent) return KeyEventResult.ignored;
+          if (event.logicalKey.isSelectKey) {
+            onToggle();
+            return KeyEventResult.handled;
+          }
+          if (event.logicalKey == LogicalKeyboardKey.arrowRight && widget.onNavigateToContent != null) {
+            widget.onNavigateToContent!();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            canRequestFocus: false,
+            onTap: onToggle,
+            borderRadius: radius,
+            child: Container(
+              decoration: BoxDecoration(color: isFocused ? t.text.withValues(alpha: 0.08) : null, borderRadius: radius),
+              clipBehavior: Clip.hardEdge,
+              child: UnconstrainedBox(
+                alignment: .centerLeft,
+                constrainedAxis: Axis.vertical,
+                clipBehavior: Clip.hardEdge,
+                child: SizedBox(
+                  width: expandedWidth - 24,
+                  child: Padding(
+                    padding: .symmetric(vertical: verticalPadding, horizontal: 17),
+                    child: Row(
+                      children: [
+                        leading ?? AppIcon(icon, fill: 1, size: iconSize, color: t.textMuted),
+                        const SizedBox(width: 11),
+                        Expanded(
+                          child: Text(label, style: labelStyle, overflow: .ellipsis),
+                        ),
+                        AppIcon(
+                          isExpanded ? Symbols.expand_less_rounded : Symbols.expand_more_rounded,
+                          fill: 1,
+                          size: 16,
+                          color: t.textMuted,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLibraryItem(_LibraryNavSection section, MediaLibrary library, dynamic t, {bool showServerName = false}) {
+    final isSelected =
+        widget.selectedTab == NavigationTabId.libraries && widget.selectedLibraryKey == library.globalKey;
+    final focusKey = _libraryItemFocusKey(section, library);
+    final isFocused = _focusTracker.isFocused(focusKey);
+    final focusNode = _focusTracker.get(focusKey);
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 12),
+      child: NavigationRailItem(
+        icon: _getLibraryIcon(library.kind.id),
+        selectedIcon: _getLibraryIcon(library.kind.id),
+        label: Column(
+          crossAxisAlignment: .start,
+          mainAxisSize: .min,
+          children: [
+            Text(
+              library.title,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                color: isSelected ? t.text : t.textMuted,
+              ),
+              overflow: .ellipsis,
+            ),
+            if (showServerName)
+              Text(
+                library.serverName!,
+                style: TextStyle(fontSize: 9, color: t.textMuted.withValues(alpha: 0.4)),
+                overflow: .ellipsis,
+              ),
+          ],
+        ),
+        isSelected: isSelected,
+        isFocused: isFocused,
+        useSimpleLayout: true,
+        onTap: () => widget.onLibrarySelected(library.globalKey),
+        focusNode: focusNode,
+        borderRadius: BorderRadius.circular(tokens(context).radiusSm),
+        iconSize: 18,
+        suppressSelectedBackground: widget.isSidebarFocused,
+        onNavigateRight: widget.onNavigateToContent,
+      ),
+    );
+  }
+}

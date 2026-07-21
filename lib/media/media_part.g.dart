@@ -1,0 +1,27 @@
+// GENERATED CODE - DO NOT MODIFY BY HAND
+
+part of 'media_part.dart';
+
+// **************************************************************************
+// JsonSerializableGenerator
+// **************************************************************************
+
+MediaPart _$MediaPartFromJson(Map<String, dynamic> json) => MediaPart(
+  id: _stringFromJson(json['id']),
+  streamPath: json['streamPath'] as String?,
+  sizeBytes: flexibleInt(json['sizeBytes']),
+  container: json['container'] as String?,
+  durationMs: flexibleInt(json['durationMs']),
+  accessible: json['accessible'] as bool?,
+  exists: json['exists'] as bool?,
+);
+
+Map<String, dynamic> _$MediaPartToJson(MediaPart instance) => <String, dynamic>{
+  'id': instance.id,
+  'streamPath': ?instance.streamPath,
+  'sizeBytes': ?instance.sizeBytes,
+  'container': ?instance.container,
+  'durationMs': ?instance.durationMs,
+  'accessible': ?instance.accessible,
+  'exists': ?instance.exists,
+};

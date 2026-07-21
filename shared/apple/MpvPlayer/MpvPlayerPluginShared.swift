@@ -1,0 +1,159 @@
+#if os(iOS) || os(tvOS)
+  import Flutter
+#elseif os(macOS)
+  import FlutterMacOS
+#endif
+
+/// Protocol for shared MpvPlayerPlugin method handlers across iOS, tvOS, and macOS.
+/// Platform-specific methods (PiP, initialization, window finding) remain
+/// in the per-platform MpvPlayerPlugin files.
+protocol MpvPluginShared: AnyObject, MpvPlayerDelegate {
+  var coreBase: MpvPlayerCoreBase? { get }
+  var eventSink: FlutterEventSink? { get }
+  var nameToId: [String: Int] { get set }
+
+  func setPlayerVisible(_ visible: Bool, restoreOnWindowVisible: Bool)
+  func updatePlayerFrame()
+
+  /// Invoked after the `pause` property is applied via setProperty so each
+  /// platform can sync its PiP/idle bookkeeping (iOS: invalidate the PiP
+  /// playback state + timebase; macOS: setPlaying/setPaused).
+  func didSetPauseProperty(value: String)
+}
+
+extension MpvPluginShared {
+
+  func handleSetProperty(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+      let name = args["name"] as? String,
+      let value = args["value"] as? String
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_ARGS", message: "Missing 'name' or 'value' argument",
+          details: nil))
+      return
+    }
+
+    guard let core = coreBase else {
+      result(nil)
+      return
+    }
+
+    core.setPropertyAsync(name, value: value) { [weak self] _ in
+      if name == "pause" {
+        self?.didSetPauseProperty(value: value)
+      }
+      result(nil)
+    }
+  }
+
+  func handleGetProperty(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+      let name = args["name"] as? String
+    else {
+      result(
+        FlutterError(code: "INVALID_ARGS", message: "Missing 'name' argument", details: nil)
+      )
+      return
+    }
+    coreBase?.getPropertyAsync(name) { propertyResult in
+      switch propertyResult {
+      case .success(let value):
+        result(value)
+      case .failure:
+        result(nil)
+      }
+    } ?? result(nil)
+  }
+
+  func handleObserveProperty(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+      let name = args["name"] as? String,
+      let format = args["format"] as? String,
+      let id = args["id"] as? Int
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_ARGS", message: "Missing 'name', 'format', or 'id' argument",
+          details: nil))
+      return
+    }
+
+    nameToId[name] = id
+    coreBase?.observeProperty(name, format: format)
+    result(nil)
+  }
+
+  func handleCommand(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+      let commandArgs = args["args"] as? [String]
+    else {
+      result(
+        FlutterError(code: "INVALID_ARGS", message: "Missing 'args' argument", details: nil)
+      )
+      return
+    }
+
+    coreBase?.commandAsync(commandArgs) { commandResult in
+      switch commandResult {
+      case .success:
+        result(nil)
+      case .failure(let error):
+        result(
+          FlutterError(
+            code: "COMMAND_FAILED", message: error.localizedDescription, details: nil))
+      }
+    } ?? result(nil)
+  }
+
+  func handleSetVisible(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+      let visible = args["visible"] as? Bool
+    else {
+      result(
+        FlutterError(
+          code: "INVALID_ARGS", message: "Missing 'visible' argument", details: nil))
+      return
+    }
+    let restoreOnWindowVisible = args["restoreOnWindowVisible"] as? Bool ?? false
+
+    DispatchQueue.main.async { [weak self] in
+      self?.setPlayerVisible(visible, restoreOnWindowVisible: restoreOnWindowVisible)
+      if visible { self?.updatePlayerFrame() }
+      result(nil)
+    }
+  }
+
+  func handleUpdateFrame(result: @escaping FlutterResult) {
+    DispatchQueue.main.async { [weak self] in
+      self?.updatePlayerFrame()
+      result(nil)
+    }
+  }
+
+  func handleSetLogLevel(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+      let level = args["level"] as? String
+    else {
+      result(FlutterError(code: "INVALID_ARGS", message: "Missing 'level'", details: nil))
+      return
+    }
+    coreBase?.setLogLevel(level)
+    result(nil)
+  }
+
+  // MARK: - MpvPlayerDelegate
+
+  func onPropertyChange(name: String, value: Any?) {
+    guard let eventSink = eventSink, let propId = nameToId[name] else { return }
+    eventSink([propId, value as Any])
+  }
+
+  func onEvent(name: String, data: [String: Any]?) {
+    guard let eventSink = eventSink else { return }
+    var event: [String: Any] = ["type": "event", "name": name]
+    if let data = data { event["data"] = data }
+    eventSink(event)
+  }
+}
