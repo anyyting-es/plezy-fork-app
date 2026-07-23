@@ -89,12 +89,29 @@ class TorrentEngineService {
   /// Resolves the default download directory for torrents
   Future<String> getDownloadDirectory() async {
     if (Platform.isAndroid) {
-      final extDir = await path_provider.getExternalStorageDirectory();
-      return '${extDir?.path}/torrents';
+      try {
+        final extDir = await path_provider.getExternalStorageDirectory();
+        if (extDir != null) return '${extDir.path}/torrents';
+      } catch (e) {
+        appLogger.w('[torrent] getExternalStorageDirectory failed: $e');
+      }
     } else {
-      final appDocDir = await path_provider.getApplicationDocumentsDirectory();
-      return '${appDocDir.path}${Platform.pathSeparator}torrents';
+      try {
+        final appDocDir = await path_provider.getApplicationDocumentsDirectory();
+        return '${appDocDir.path}${Platform.pathSeparator}torrents';
+      } catch (e) {
+        appLogger.w('[torrent] getApplicationDocumentsDirectory failed: $e, falling back to ApplicationSupportDirectory');
+      }
+      try {
+        final appSupportDir = await path_provider.getApplicationSupportDirectory();
+        return '${appSupportDir.path}${Platform.pathSeparator}torrents';
+      } catch (e) {
+        appLogger.w('[torrent] getApplicationSupportDirectory failed: $e');
+      }
     }
+
+    final userHome = Platform.environment['USERPROFILE'] ?? Platform.environment['HOME'] ?? Directory.systemTemp.path;
+    return '$userHome${Platform.pathSeparator}.aniting${Platform.pathSeparator}torrents';
   }
 
   /// Locates the Go backend binary based on platform and current environment.

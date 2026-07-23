@@ -316,7 +316,7 @@ void MpvPlayer::SetRect(RECT rect, double device_pixel_ratio) {
   // The video window is a child of the Flutter view; the Dart rect is already
   // in view physical pixels, which is exactly the child coordinate space. No
   // screen mapping, no padding.
-  ::SetWindowPos(hwnd_, HWND_TOP, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, SWP_NOACTIVATE);
+  ::SetWindowPos(hwnd_, nullptr, rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top, SWP_NOZORDER | SWP_NOACTIVATE);
 
   // mpv creates its inner window lazily on its own thread; subclass it (and
   // re-subclass if mpv ever recreates it) so mouse input over the video is

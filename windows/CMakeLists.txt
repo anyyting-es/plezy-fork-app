@@ -112,6 +112,24 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 add_subdirectory("runner")
 
 
+# Guard package:jni build on Windows if system JDK is not installed.
+# package:jni is a transitive dependency of Android-only packages (e.g. cronet_http, saf_util).
+macro(add_subdirectory dir)
+  if("${dir}" MATCHES "jni")
+    find_package(JNI QUIET COMPONENTS JVM)
+    if(NOT JNI_FOUND)
+      message(STATUS "JDK not found: skipping native package:jni compilation on Windows.")
+      if(NOT TARGET jni)
+        add_library(jni INTERFACE)
+      endif()
+    else()
+      _add_subdirectory(${ARGV})
+    endif()
+  else()
+    _add_subdirectory(${ARGV})
+  endif()
+endmacro()
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
@@ -178,3 +196,10 @@ install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
 install(FILES "${MPV_LIB_DIR}/libmpv-2.dll"
   DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
+
+# Install Go backend executable
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../backend/aniting-backend.exe")
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../backend/aniting-backend.exe"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()

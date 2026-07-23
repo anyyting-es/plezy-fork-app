@@ -750,10 +750,17 @@ class _PlexVideoControlsState extends State<PlexVideoControls>
             // _handleGlobalKeyEvent.
             onPointerDown: (event) {
               _cancelAutoSkipFromUserInteraction();
+              _showControlsFromPointerActivity();
               if (isMobile) _handleTouchPointerDown(event);
             },
-            onPointerHover: (_) => _cancelAutoSkipFromUserInteraction(),
-            onPointerMove: isMobile ? _handleTouchPointerMove : null,
+            onPointerHover: (_) {
+              _cancelAutoSkipFromUserInteraction();
+              _showControlsFromPointerActivity();
+            },
+            onPointerMove: (event) {
+              _showControlsFromPointerActivity();
+              if (isMobile) _handleTouchPointerMove(event);
+            },
             onPointerUp: isMobile ? _handleTouchPointerUp : null,
             onPointerCancel: isMobile ? _handleTouchPointerCancel : null,
             onPointerSignal: _handlePointerSignal,
