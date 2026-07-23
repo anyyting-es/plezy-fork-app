@@ -143,11 +143,19 @@ class _ProfileSessionScreenState extends State<ProfileSessionScreen> {
                     HiddenLibrariesProvider(storageService: context.read<StorageService>(), profileId: activeId),
                 lazy: true,
               ),
-              ChangeNotifierProvider(
+              ChangeNotifierProxyProvider<TrackersProvider, LibrariesProvider>(
                 create: (context) => LibrariesProvider(
                   storageService: context.read<StorageService>(),
                   multiServer: context.read<MultiServerProvider>(),
                 ),
+                update: (context, trackers, previous) {
+                  final provider = previous ?? LibrariesProvider(
+                    storageService: context.read<StorageService>(),
+                    multiServer: context.read<MultiServerProvider>(),
+                  );
+                  provider.updateTrackers(trackers);
+                  return provider;
+                },
               ),
               ChangeNotifierProvider(
                 create: (context) {

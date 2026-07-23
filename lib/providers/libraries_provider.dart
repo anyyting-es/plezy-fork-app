@@ -1,9 +1,15 @@
 import 'package:flutter/foundation.dart';
 
 import '../media/media_library.dart';
+import '../media/media_kind.dart';
+import '../media/media_backend.dart';
 import '../mixins/disposable_change_notifier_mixin.dart';
 import '../services/data_aggregation_service.dart';
 import '../services/storage_service.dart';
+import '../services/settings_service.dart';
+import '../services/trackers/anilist/anilist_tracker.dart';
+import 'trackers_provider.dart';
+import '../i18n/strings.g.dart';
 import '../utils/app_logger.dart';
 import '../utils/content_utils.dart';
 import 'multi_server_provider.dart';
@@ -24,6 +30,7 @@ class LibrariesProvider extends ChangeNotifier with DisposableChangeNotifierMixi
     // or restart. Removed in [dispose] so a profile switch can't leave a
     // stale listener on the app-global provider.
     _multiServer?.addOnlineServersListener(syncToOnlineServers);
+    SettingsService.instance.listenable(SettingsService.discoverContentType).addListener(_onSettingChanged);
   }
 
   final MultiServerProvider? _multiServer;
@@ -32,6 +39,24 @@ class LibrariesProvider extends ChangeNotifier with DisposableChangeNotifierMixi
   List<MediaLibrary> _libraries = [];
   LibrariesLoadState _loadState = LibrariesLoadState.initial;
   String? _errorMessage;
+
+  TrackersProvider? _trackers;
+
+  void updateTrackers(TrackersProvider trackers) {
+    if (_trackers == trackers) return;
+    _trackers?.removeListener(_onTrackersChanged);
+    _trackers = trackers;
+    _trackers?.addListener(_onTrackersChanged);
+    safeNotifyListeners();
+  }
+
+  void _onTrackersChanged() {
+    safeNotifyListeners();
+  }
+
+  void _onSettingChanged() {
+    safeNotifyListeners();
+  }
 
   /// Coalesces concurrent `loadLibraries()` calls so two simultaneous callers
   /// see the same in-flight result instead of racing two separate fetches.
@@ -56,13 +81,59 @@ class LibrariesProvider extends ChangeNotifier with DisposableChangeNotifierMixi
   final Set<String> _pendingDeltaServerIds = {};
 
   /// Unmodifiable list of all libraries (filtered for supported types, ordered)
-  List<MediaLibrary> get libraries => List.unmodifiable(_libraries);
+  List<MediaLibrary> get libraries {
+    final isAnilistMode = SettingsService.instance.read(SettingsService.discoverContentType) == DiscoverContentType.anime;
+    final trackers = AnilistTracker.instance;
+    if (isAnilistMode && trackers.client != null) {
+      return [
+        MediaLibrary(
+          id: 'anilist_current',
+          backend: MediaBackend.anilist,
+          title: t.libraries.anilist.current,
+          kind: MediaKind.show,
+        ),
+        MediaLibrary(
+          id: 'anilist_planning',
+          backend: MediaBackend.anilist,
+          title: t.libraries.anilist.planning,
+          kind: MediaKind.show,
+        ),
+        MediaLibrary(
+          id: 'anilist_completed',
+          backend: MediaBackend.anilist,
+          title: t.libraries.anilist.completed,
+          kind: MediaKind.show,
+        ),
+        MediaLibrary(
+          id: 'anilist_paused',
+          backend: MediaBackend.anilist,
+          title: t.libraries.anilist.paused,
+          kind: MediaKind.show,
+        ),
+        MediaLibrary(
+          id: 'anilist_dropped',
+          backend: MediaBackend.anilist,
+          title: t.libraries.anilist.dropped,
+          kind: MediaKind.show,
+        ),
+      ];
+    }
+    return List.unmodifiable(_libraries);
+  }
 
   /// Whether libraries are currently being loaded
-  bool get isLoading => _loadState == LibrariesLoadState.loading;
+  bool get isLoading {
+    final isAnilistMode = SettingsService.instance.read(SettingsService.discoverContentType) == DiscoverContentType.anime;
+    if (isAnilistMode) return false;
+    return _loadState == LibrariesLoadState.loading;
+  }
 
   /// Whether libraries have been loaded at least once
-  bool get hasLoaded => _loadState == LibrariesLoadState.loaded;
+  bool get hasLoaded {
+    final isAnilistMode = SettingsService.instance.read(SettingsService.discoverContentType) == DiscoverContentType.anime;
+    if (isAnilistMode) return true;
+    return _loadState == LibrariesLoadState.loaded;
+  }
 
   /// Current load state
   LibrariesLoadState get loadState => _loadState;
@@ -71,7 +142,7 @@ class LibrariesProvider extends ChangeNotifier with DisposableChangeNotifierMixi
   String? get errorMessage => _errorMessage;
 
   /// Whether libraries are available
-  bool get hasLibraries => _libraries.isNotEmpty;
+  bool get hasLibraries => libraries.isNotEmpty;
 
   /// Initialize the provider with the aggregation service.
   /// This should be called after server connection is established.
@@ -265,6 +336,8 @@ class LibrariesProvider extends ChangeNotifier with DisposableChangeNotifierMixi
   @override
   void dispose() {
     _multiServer?.removeOnlineServersListener(syncToOnlineServers);
+    _trackers?.removeListener(_onTrackersChanged);
+    SettingsService.instance.listenable(SettingsService.discoverContentType).removeListener(_onSettingChanged);
     super.dispose();
   }
 

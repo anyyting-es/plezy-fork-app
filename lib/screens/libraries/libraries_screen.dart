@@ -47,6 +47,7 @@ import 'tabs/library_playlists_tab.dart';
 enum LibraryTabType { recommended, browse, collections, playlists }
 
 List<LibraryTabType> _getVisibleTabs(MediaLibrary library) {
+  if (library.backend == MediaBackend.anilist) return [LibraryTabType.browse];
   if (library.isShared) return [LibraryTabType.browse, LibraryTabType.playlists];
   return LibraryTabType.values;
 }

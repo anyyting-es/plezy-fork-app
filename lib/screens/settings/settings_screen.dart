@@ -18,6 +18,7 @@ import '../../mixins/mounted_set_state_mixin.dart';
 import '../../mixins/refreshable.dart';
 import '../../providers/hidden_libraries_provider.dart';
 import '../../providers/libraries_provider.dart';
+import '../../providers/catalog_provider.dart';
 import '../../services/donation_service.dart';
 import '../../services/download_storage_service.dart';
 import '../../services/file_picker_service.dart';
@@ -41,6 +42,7 @@ import '../../widgets/settings_section.dart';
 import '../../profiles/active_profile_provider.dart';
 import '../../profiles/profile.dart';
 import 'about_screen.dart';
+import 'settings_utils.dart';
 import 'add_connection_screen.dart';
 import 'appearance_settings_screen.dart';
 import 'keyboard_shortcuts_screen.dart';
@@ -63,6 +65,7 @@ class _SettingsScreenState extends State<SettingsScreen> with FocusableTab, Moun
 
   // Focus tracking keys
   static const _kDonate = 'donate';
+  static const _kContentType = 'content_type';
   static const _kAppearance = 'appearance';
   static const _kPlayback = 'playback';
   static const _kTrackers = 'trackers';
@@ -149,6 +152,7 @@ class _SettingsScreenState extends State<SettingsScreen> with FocusableTab, Moun
                 SettingsGroup(
                   children: [
                     if (DonationService.isEnabled) _buildDonateTile(),
+                    _buildContentTypeTile(),
                     _buildAppearanceTile(),
                     _buildPlaybackTile(),
                     _buildTrackersTile(),
@@ -200,6 +204,28 @@ class _SettingsScreenState extends State<SettingsScreen> with FocusableTab, Moun
         final url = Uri.parse(DonationService.donationUrl);
         if (await canLaunchUrl(url)) {
           await launchUrl(url, mode: LaunchMode.externalApplication);
+        }
+      },
+    );
+  }
+
+  Widget _buildContentTypeTile() {
+    return SettingSelectionTile<settings.DiscoverContentType, settings.DiscoverContentType>(
+      pref: settings.SettingsService.discoverContentType,
+      icon: Symbols.category_rounded,
+      title: t.settings.discoverContentType,
+      subtitleBuilder: (v) => v == settings.DiscoverContentType.anime 
+          ? t.settings.animeCatalog 
+          : t.settings.generalCatalog,
+      options: settings.DiscoverContentType.values.map((v) => DialogOption(
+        value: v,
+        title: v == settings.DiscoverContentType.anime ? t.settings.animeCatalog : t.settings.generalCatalog,
+      )).toList(),
+      decode: (v) => v,
+      encode: (v) => v,
+      onAfterWrite: (newType) {
+        if (mounted) {
+          context.read<CatalogProvider>().forceRefresh();
         }
       },
     );

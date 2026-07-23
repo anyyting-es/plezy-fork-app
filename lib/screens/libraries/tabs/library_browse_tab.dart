@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:provider/provider.dart';
 import 'package:cached_network_image_ce/cached_network_image.dart';
+import '../../../anime/models/anime_media.dart';
+import '../../../services/trackers/anilist/anilist_tracker.dart';
 import '../../../media/library_first_character.dart';
 import '../../../media/library_query.dart';
 import '../../../media/media_backend.dart';
@@ -517,6 +519,19 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<MediaItem, LibraryBrows
     _resetTopOfPageState();
     _currentFirstVisibleIndex.value = 0;
 
+    if (widget.library.backend == MediaBackend.anilist) {
+      if (generation != _contentRequestId || !mounted) return;
+      setState(() {
+        _filters = const [];
+        _sortOptions = const [];
+        _jellyfinFilterValues = const {};
+        _selectedFilters = const {};
+        _selectedGrouping = _normalizeGrouping(null);
+      });
+      await _loadItems();
+      return;
+    }
+
     // Plex returns categories from `/library/sections/{id}/filters` +
     // `/sorts`; Jellyfin maps `/Items/Filters` into the same shape with
     // values pre-cached and a hardcoded client-side sort list. Both flow
@@ -697,6 +712,41 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<MediaItem, LibraryBrows
 
   @override
   Future<LibraryPage<MediaItem>> fetchPage(int start, int size, AbortController? abort) async {
+    if (widget.library.backend == MediaBackend.anilist) {
+      final status = switch (widget.library.id) {
+        'anilist_current' => 'CURRENT',
+        'anilist_planning' => 'PLANNING',
+        'anilist_completed' => 'COMPLETED',
+        'anilist_paused' => 'PAUSED',
+        'anilist_dropped' => 'DROPPED',
+        _ => 'CURRENT',
+      };
+
+      final client = AnilistTracker.instance.client;
+      if (client == null) {
+        return const LibraryPage(items: [], totalCount: 0);
+      }
+
+      final entries = await client.getAnimeListByStatus(status);
+      final items = entries.map((entry) {
+        final mediaJson = entry['media'] as Map<String, dynamic>;
+        final anime = AnimeMedia.fromJson(mediaJson);
+        return anime.toMediaItem().copyWith(
+          viewedLeafCount: (entry['progress'] as num?)?.toInt(),
+          leafCount: anime.episodes,
+        );
+      }).toList();
+
+      final end = (start + size).clamp(0, items.length);
+      final pageItems = start < items.length ? items.sublist(start, end) : <MediaItem>[];
+
+      return LibraryPage(
+        items: pageItems,
+        totalCount: items.length,
+        offset: start,
+      );
+    }
+
     final client = context.getMediaClientForLibrary(widget.library);
     final filterParams = _buildFilterParams();
     final query = libraryQueryFromPlexMap(
@@ -1517,7 +1567,7 @@ class _LibraryBrowseTabState extends BaseLibraryTabState<MediaItem, LibraryBrows
     // Prefetch 2 rows beyond visible area
     final prefetchEnd = visibleEnd + 2 * _scrollMetrics.columnCount;
 
-    final client = getMediaClientForLibrary();
+    final client = widget.library.backend == MediaBackend.anilist ? null : getMediaClientForLibrary();
     final devicePixelRatio = MediaImageHelper.effectiveDevicePixelRatio(context);
     final episodePosterMode = context.settingsRead(SettingsService.episodePosterMode);
 

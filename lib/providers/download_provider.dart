@@ -537,6 +537,7 @@ class DownloadProvider extends ChangeNotifier with DisposableChangeNotifierMixin
               MediaBackend.plex => <String, dynamic>{'key': '/library/metadata/$showRatingKey'},
               MediaBackend.jellyfin => <String, dynamic>{'Id': showRatingKey, 'Type': 'Series'},
               MediaBackend.anilist => <String, dynamic>{'Id': showRatingKey, 'Type': 'Series'},
+              MediaBackend.tmdb => <String, dynamic>{'Id': showRatingKey, 'Type': 'Series'},
             };
             shows[showRatingKey] = MediaItem(
               id: showRatingKey,

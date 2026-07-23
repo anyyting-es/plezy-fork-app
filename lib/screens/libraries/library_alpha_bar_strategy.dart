@@ -69,6 +69,7 @@ abstract class LibraryAlphaBarStrategy {
       ),
       MediaBackend.jellyfin => const JellyfinAlphaBarStrategy(),
       MediaBackend.anilist => const JellyfinAlphaBarStrategy(),
+      MediaBackend.tmdb => const JellyfinAlphaBarStrategy(),
     };
   }
 }

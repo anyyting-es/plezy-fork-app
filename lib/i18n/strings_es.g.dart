@@ -215,6 +215,10 @@ class _TranslationsSettingsEs extends TranslationsSettingsEn {
 
 	// Translations
 	@override String get title => 'Configuración';
+	@override String get discoverContentType => 'Catálogo de Inicio';
+	@override String get discoverContentTypeDescription => 'Seleccionar el tipo de contenido mostrado en la pantalla de inicio';
+	@override String get animeCatalog => 'Solo Anime (AniList)';
+	@override String get generalCatalog => 'Películas y Series (TMDB)';
 	@override String get supportDeveloper => 'Apoya Plezy';
 	@override String get supportDeveloperDescription => 'Dona vía Liberapay para financiar el desarrollo';
 	@override String get language => 'Idioma';
@@ -934,6 +938,7 @@ class _TranslationsLibrariesEs extends TranslationsLibrariesEn {
 	final TranslationsEs _root; // ignore: unused_field
 
 	// Translations
+	@override late final _TranslationsLibrariesAnilistEs anilist = _TranslationsLibrariesAnilistEs._(_root);
 	@override String get title => 'Bibliotecas';
 	@override String get fallbackTitle => 'Biblioteca';
 	@override String get scanLibraryFiles => 'Escanear Archivos de la Biblioteca';
@@ -1710,6 +1715,20 @@ class _TranslationsVideoControlsPipErrorsEs extends TranslationsVideoControlsPip
 	@override String unknown({required Object error}) => 'Ocurrió un error: ${error}';
 }
 
+// Path: libraries.anilist
+class _TranslationsLibrariesAnilistEs extends TranslationsLibrariesAnilistEn {
+	_TranslationsLibrariesAnilistEs._(TranslationsEs root) : this._root = root, super.internal(root);
+
+	final TranslationsEs _root; // ignore: unused_field
+
+	// Translations
+	@override String get current => 'Siguiendo';
+	@override String get planning => 'Planificado';
+	@override String get completed => 'Completado';
+	@override String get paused => 'En Pausa';
+	@override String get dropped => 'Abandonado';
+}
+
 // Path: libraries.tabs
 class _TranslationsLibrariesTabsEs extends TranslationsLibrariesTabsEn {
 	_TranslationsLibrariesTabsEs._(TranslationsEs root) : this._root = root, super.internal(root);
@@ -2023,6 +2042,10 @@ extension on TranslationsEs {
 			'update.latestVersion' => 'Ya estás en la última versión',
 			'update.checkFailed' => 'Error al buscar actualizaciones',
 			'settings.title' => 'Configuración',
+			'settings.discoverContentType' => 'Catálogo de Inicio',
+			'settings.discoverContentTypeDescription' => 'Seleccionar el tipo de contenido mostrado en la pantalla de inicio',
+			'settings.animeCatalog' => 'Solo Anime (AniList)',
+			'settings.generalCatalog' => 'Películas y Series (TMDB)',
 			'settings.supportDeveloper' => 'Apoya Plezy',
 			'settings.supportDeveloperDescription' => 'Dona vía Liberapay para financiar el desarrollo',
 			'settings.language' => 'Idioma',
@@ -2455,12 +2478,12 @@ extension on TranslationsEs {
 			'messages.logsCopied' => 'Logs copiados al portapapeles',
 			'messages.noLogsAvailable' => 'No hay logs disponibles',
 			'messages.libraryScanning' => ({required Object title}) => 'Escaneando "${title}"...',
+			_ => null,
+		} ?? switch (path) {
 			'messages.libraryScanStarted' => ({required Object title}) => 'Escaneo de biblioteca iniciado para "${title}"',
 			'messages.libraryScanFailed' => ({required Object error}) => 'Error al escanear biblioteca: ${error}',
 			'messages.metadataRefreshing' => ({required Object title}) => 'Actualizando metadatos de "${title}"...',
 			'messages.metadataRefreshStarted' => ({required Object title}) => 'Actualización de metadatos iniciada para "${title}"',
-			_ => null,
-		} ?? switch (path) {
 			'messages.metadataRefreshFailed' => ({required Object error}) => 'Error al actualizar metadatos: ${error}',
 			'messages.logoutConfirm' => '¿Estás seguro de que quieres cerrar sesión?',
 			'messages.noSeasonsFound' => 'No se encontraron temporadas',
@@ -2612,6 +2635,11 @@ extension on TranslationsEs {
 			'errors.failedToSwitchProfile' => ({required Object displayName}) => 'Error al cambiar al perfil ${displayName}',
 			'errors.failedToDeleteProfile' => ({required Object displayName}) => 'Error al eliminar ${displayName}',
 			'errors.failedToRate' => 'No se pudo actualizar la calificación',
+			'libraries.anilist.current' => 'Siguiendo',
+			'libraries.anilist.planning' => 'Planificado',
+			'libraries.anilist.completed' => 'Completado',
+			'libraries.anilist.paused' => 'En Pausa',
+			'libraries.anilist.dropped' => 'Abandonado',
 			'libraries.title' => 'Bibliotecas',
 			'libraries.fallbackTitle' => 'Biblioteca',
 			'libraries.scanLibraryFiles' => 'Escanear Archivos de la Biblioteca',
@@ -2964,6 +2992,8 @@ extension on TranslationsEs {
 			'shaders.deleteShader' => 'Eliminar shader',
 			'shaders.deleteShaderConfirm' => ({required Object name}) => '¿Eliminar "${name}"?',
 			'companionRemote.title' => 'Control remoto',
+			_ => null,
+		} ?? switch (path) {
 			'companionRemote.connectedTo' => ({required Object name}) => 'Conectado a ${name}',
 			'companionRemote.unknownDevice' => 'Dispositivo desconocido',
 			'companionRemote.session.startingServer' => 'Iniciando servidor remoto...',
@@ -2973,8 +3003,6 @@ extension on TranslationsEs {
 			'companionRemote.session.serverRunning' => 'Servidor remoto activo',
 			'companionRemote.session.serverStopped' => 'Servidor remoto detenido',
 			'companionRemote.session.serverRunningDescription' => 'Los dispositivos móviles de tu red pueden conectarse a esta app',
-			_ => null,
-		} ?? switch (path) {
 			'companionRemote.session.serverStoppedDescription' => 'Inicia el servidor para permitir que los dispositivos móviles se conecten',
 			'companionRemote.session.usePhoneToControl' => 'Usa tu dispositivo móvil para controlar esta aplicación',
 			'companionRemote.session.startServer' => 'Iniciar servidor',

@@ -130,8 +130,8 @@ class WatchedIndicator extends StatelessWidget {
               ),
             ),
           ),
-        // Progress bar for seasons (viewedLeafCount / leafCount)
-        if (item.isSeason && item.isPartiallyWatched)
+        // Progress bar for seasons and AniList items (viewedLeafCount / leafCount)
+        if ((item.isSeason || item.isAnilist) && item.isPartiallyWatched)
           Positioned(
             bottom: 0,
             left: 0,

@@ -36,6 +36,73 @@ class AnilistClient implements DisposableTrackerClient {
     return null;
   }
 
+  /// Fetch a specific anime list of the user by status.
+  Future<List<Map<String, dynamic>>> getAnimeListByStatus(String status) async {
+    final userName = await getViewerName();
+    if (userName == null) return [];
+
+    const queryStr = r'''
+      query($userName: String, $status: MediaListStatus) {
+        MediaListCollection(userName: $userName, type: ANIME, status: $status) {
+          lists {
+            entries {
+              id
+              status
+              progress
+              score(format: POINT_100)
+              updatedAt
+              media {
+                id
+                idMal
+                title { romaji english native }
+                coverImage { large extraLarge color }
+                bannerImage
+                episodes
+                averageScore
+                format
+                status
+                season
+                seasonYear
+                genres
+                description(asHtml: false)
+              }
+            }
+          }
+        }
+      }
+    ''';
+
+    final data = await query(queryStr, variables: {'userName': userName, 'status': status});
+    final collection = data['MediaListCollection'];
+    if (collection is! Map) return [];
+    final lists = collection['lists'];
+    if (lists is! List) return [];
+
+    final allEntries = <Map<String, dynamic>>[];
+    final seenMediaIds = <int>{};
+    for (final list in lists) {
+      if (list is Map) {
+        final entries = list['entries'];
+        if (entries is List) {
+          for (final entry in entries) {
+            if (entry is Map<String, dynamic>) {
+              final media = entry['media'];
+              if (media is Map) {
+                final mediaId = media['id'] as int?;
+                if (mediaId != null) {
+                  if (seenMediaIds.contains(mediaId)) continue;
+                  seenMediaIds.add(mediaId);
+                }
+              }
+              allEntries.add(entry);
+            }
+          }
+        }
+      }
+    }
+    return allEntries;
+  }
+
   /// Update the viewer's media-list entry for an AniList media ID.
   Future<void> saveMediaListEntry({required int mediaId, required int progress, required String status}) async {
     const mutation = '''

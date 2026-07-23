@@ -369,6 +369,18 @@ class TranslationsSettingsEn {
 	/// en: 'Settings'
 	String get title => 'Settings';
 
+	/// en: 'Home Content Catalog'
+	String get discoverContentType => 'Home Content Catalog';
+
+	/// en: 'Select the content type shown on the Home screen'
+	String get discoverContentTypeDescription => 'Select the content type shown on the Home screen';
+
+	/// en: 'Anime (AniList)'
+	String get animeCatalog => 'Anime (AniList)';
+
+	/// en: 'Movies & TV Series (TMDB)'
+	String get generalCatalog => 'Movies & TV Series (TMDB)';
+
 	/// en: 'Support Plezy'
 	String get supportDeveloper => 'Support Plezy';
 
@@ -2217,6 +2229,7 @@ class TranslationsLibrariesEn {
 	final Translations _root; // ignore: unused_field
 
 	// Translations
+	late final TranslationsLibrariesAnilistEn anilist = TranslationsLibrariesAnilistEn.internal(_root);
 
 	/// en: 'Libraries'
 	String get title => 'Libraries';
@@ -4097,6 +4110,30 @@ class TranslationsVideoControlsPipErrorsEn {
 	String unknown({required Object error}) => 'An error occurred: ${error}';
 }
 
+// Path: libraries.anilist
+class TranslationsLibrariesAnilistEn {
+	TranslationsLibrariesAnilistEn.internal(this._root);
+
+	final Translations _root; // ignore: unused_field
+
+	// Translations
+
+	/// en: 'Watching'
+	String get current => 'Watching';
+
+	/// en: 'Planning'
+	String get planning => 'Planning';
+
+	/// en: 'Completed'
+	String get completed => 'Completed';
+
+	/// en: 'Paused'
+	String get paused => 'Paused';
+
+	/// en: 'Dropped'
+	String get dropped => 'Dropped';
+}
+
 // Path: libraries.tabs
 class TranslationsLibrariesTabsEn {
 	TranslationsLibrariesTabsEn.internal(this._root);
@@ -4652,6 +4689,10 @@ extension on Translations {
 			'update.latestVersion' => 'You are on the latest version',
 			'update.checkFailed' => 'Failed to check for updates',
 			'settings.title' => 'Settings',
+			'settings.discoverContentType' => 'Home Content Catalog',
+			'settings.discoverContentTypeDescription' => 'Select the content type shown on the Home screen',
+			'settings.animeCatalog' => 'Anime (AniList)',
+			'settings.generalCatalog' => 'Movies & TV Series (TMDB)',
 			'settings.supportDeveloper' => 'Support Plezy',
 			'settings.supportDeveloperDescription' => 'Donate via Liberapay to fund development',
 			'settings.language' => 'Language',
@@ -5084,12 +5125,12 @@ extension on Translations {
 			'messages.musicNotSupported' => 'Music playback is not yet supported',
 			'messages.noDescriptionAvailable' => 'No description available',
 			'messages.noProfilesAvailable' => 'No profiles available',
+			_ => null,
+		} ?? switch (path) {
 			'messages.contactAdminForProfiles' => 'Contact your server administrator to add profiles',
 			'messages.unableToDetermineLibrarySection' => 'Unable to determine library section for this item',
 			'messages.logsCleared' => 'Logs cleared',
 			'messages.logsCopied' => 'Logs copied to clipboard',
-			_ => null,
-		} ?? switch (path) {
 			'messages.noLogsAvailable' => 'No logs available',
 			'messages.libraryScanning' => ({required Object title}) => 'Scanning "${title}"...',
 			'messages.libraryScanStarted' => ({required Object title}) => 'Library scan started for "${title}"',
@@ -5247,6 +5288,11 @@ extension on Translations {
 			'errors.failedToSwitchProfile' => ({required Object displayName}) => 'Failed to switch to ${displayName}',
 			'errors.failedToDeleteProfile' => ({required Object displayName}) => 'Failed to delete ${displayName}',
 			'errors.failedToRate' => 'Couldn\'t update rating',
+			'libraries.anilist.current' => 'Watching',
+			'libraries.anilist.planning' => 'Planning',
+			'libraries.anilist.completed' => 'Completed',
+			'libraries.anilist.paused' => 'Paused',
+			'libraries.anilist.dropped' => 'Dropped',
 			'libraries.title' => 'Libraries',
 			'libraries.fallbackTitle' => 'Library',
 			'libraries.scanLibraryFiles' => 'Scan Library Files',
@@ -5593,6 +5639,8 @@ extension on Translations {
 			'shaders.artcnnVariantDenoise' => 'Denoise',
 			'shaders.artcnnVariantDenoiseSharpen' => 'Denoise + Sharpen',
 			'shaders.qualityFast' => 'Fast',
+			_ => null,
+		} ?? switch (path) {
 			'shaders.qualityHQ' => 'High Quality',
 			'shaders.mode' => 'Mode',
 			'shaders.importShader' => 'Import Shader',
@@ -5602,8 +5650,6 @@ extension on Translations {
 			'shaders.deleteShader' => 'Delete Shader',
 			'shaders.deleteShaderConfirm' => ({required Object name}) => 'Delete "${name}"?',
 			'companionRemote.title' => 'Companion Remote',
-			_ => null,
-		} ?? switch (path) {
 			'companionRemote.connectedTo' => ({required Object name}) => 'Connected to ${name}',
 			'companionRemote.unknownDevice' => 'Unknown Device',
 			'companionRemote.session.startingServer' => 'Starting remote server...',

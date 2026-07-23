@@ -20,6 +20,7 @@ class RepoExtension {
   final String language;
   final bool dub;
   final bool sub;
+  final String contentType;
 
   RepoExtension({
     required this.id,
@@ -31,6 +32,7 @@ class RepoExtension {
     required this.language,
     required this.dub,
     required this.sub,
+    required this.contentType,
   });
 
   factory RepoExtension.fromJson(Map<String, dynamic> json, Uri baseUri) {
@@ -47,7 +49,19 @@ class RepoExtension {
       language: json['language']?.toString() ?? 'multi',
       dub: json['dub'] == true,
       sub: json['sub'] == true,
+      contentType: json['contentType']?.toString() ?? _deduceContentType(json['id']?.toString() ?? ''),
     );
+  }
+
+  static String _deduceContentType(String id) {
+    final idLower = id.toLowerCase();
+    if (idLower.contains('anime') || idLower.contains('tosho') || idLower.contains('neko') || idLower.contains('bt')) {
+      return 'anime';
+    }
+    if (idLower.contains('manga')) {
+      return 'manga';
+    }
+    return 'general';
   }
 }
 
@@ -642,7 +656,11 @@ class _ExtensionsSettingsScreenState extends State<ExtensionsSettingsScreen> {
     final allIds = <String>{};
     final items = <dynamic>[];
 
+    final activeType = SettingsService.instance.read(SettingsService.discoverContentType);
+    final String activeTypeStr = activeType == DiscoverContentType.anime ? 'anime' : 'general';
+
     for (final ext in _repoExtensions) {
+      if (ext.contentType != activeTypeStr) continue;
       if (_selectedType != 'all' && ext.type != _selectedType) continue;
       if (_selectedLanguage != 'all' && 
           ext.language != _selectedLanguage && 
@@ -657,6 +675,7 @@ class _ExtensionsSettingsScreenState extends State<ExtensionsSettingsScreen> {
 
     for (final ext in _installedExtensions) {
       if (!allIds.contains(ext.id)) {
+        if (ext.contentType != activeTypeStr) continue;
         final localType = (ext.id.contains('torrent') || ext.id.contains('tosho') || ext.id.contains('bt')) ? 'torrent' : 'online';
         if (_selectedType != 'all' && localType != _selectedType) continue;
         if (_selectedLanguage != 'all') continue; // Local manually installed ones don't have language property
@@ -821,14 +840,25 @@ class _ExtensionsSettingsScreenState extends State<ExtensionsSettingsScreen> {
                               onPressed: () => _showCodeViewerDialog(item.name, item.id, item.code),
                             ),
                             if (installed) ...[
-                              IconButton(
-                                icon: Icon(
-                                  Symbols.cloud_download_rounded,
-                                  color: updateAvailable ? Colors.amber.shade800 : theme.colorScheme.onSurface.withOpacity(0.4),
+                              if (updateAvailable)
+                                ElevatedButton.icon(
+                                  onPressed: () => _install(item),
+                                  icon: const Icon(Symbols.update_rounded, size: 18),
+                                  label: const Text('Actualizar'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.amber.shade800,
+                                    foregroundColor: Colors.white,
+                                  ),
+                                )
+                              else
+                                IconButton(
+                                  icon: Icon(
+                                    Symbols.cloud_download_rounded,
+                                    color: theme.colorScheme.onSurface.withOpacity(0.4),
+                                  ),
+                                  tooltip: 'Reinstalar',
+                                  onPressed: () => _install(item),
                                 ),
-                                tooltip: updateAvailable ? 'Actualizar' : 'Reinstalar',
-                                onPressed: () => _install(item),
-                              ),
                               const Spacer(),
                               TextButton.icon(
                                 onPressed: () => _uninstall(item.id, item.name),
@@ -958,15 +988,28 @@ class _ExtensionsSettingsScreenState extends State<ExtensionsSettingsScreen> {
                       ),
                       const SizedBox(width: 8),
                       if (installed) ...[
-                        IconButton(
-                          icon: Icon(
-                            Symbols.cloud_download_rounded,
-                            color: updateAvailable ? Colors.amber.shade800 : theme.colorScheme.onSurface.withOpacity(0.4),
+                        if (updateAvailable) ...[
+                          ElevatedButton.icon(
+                            onPressed: () => _install(item),
+                            icon: const Icon(Symbols.update_rounded, size: 18),
+                            label: const Text('Actualizar'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amber.shade800,
+                              foregroundColor: Colors.white,
+                            ),
                           ),
-                          tooltip: updateAvailable ? 'Actualizar extensión' : 'Reinstalar extensión',
-                          onPressed: () => _install(item),
-                        ),
-                        const SizedBox(width: 8),
+                          const SizedBox(width: 8),
+                        ] else ...[
+                          IconButton(
+                            icon: Icon(
+                              Symbols.cloud_download_rounded,
+                              color: theme.colorScheme.onSurface.withOpacity(0.4),
+                            ),
+                            tooltip: 'Reinstalar extensión',
+                            onPressed: () => _install(item),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
                         Switch(
                           value: enabled,
                           onChanged: (_) => _toggleExtension(item.id),

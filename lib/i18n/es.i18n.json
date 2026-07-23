@@ -86,6 +86,10 @@
   },
   "settings": {
     "title": "Configuración",
+    "discoverContentType": "Catálogo de Inicio",
+    "discoverContentTypeDescription": "Seleccionar el tipo de contenido mostrado en la pantalla de inicio",
+    "animeCatalog": "Solo Anime (AniList)",
+    "generalCatalog": "Películas y Series (TMDB)",
     "supportDeveloper": "Apoya Plezy",
     "supportDeveloperDescription": "Dona vía Liberapay para financiar el desarrollo",
     "language": "Idioma",
@@ -713,6 +717,13 @@
     "failedToRate": "No se pudo actualizar la calificación"
   },
   "libraries": {
+    "anilist": {
+      "current": "Siguiendo",
+      "planning": "Planificado",
+      "completed": "Completado",
+      "paused": "En Pausa",
+      "dropped": "Abandonado"
+    },
     "title": "Bibliotecas",
     "fallbackTitle": "Biblioteca",
     "scanLibraryFiles": "Escanear Archivos de la Biblioteca",

@@ -10,6 +10,8 @@ import '../services/settings_service.dart';
 extension SettingsContextRead on BuildContext {
   T settingsRead<T>(Pref<T> pref) => SettingsService.instance.read(pref);
   Future<void> settingsWrite<T>(Pref<T> pref, T value) => SettingsService.instance.write(pref, value);
+  bool get isAnilist => settingsRead(SettingsService.discoverContentType) == DiscoverContentType.anime;
+  bool get isTmdb => settingsRead(SettingsService.discoverContentType) == DiscoverContentType.general;
 }
 
 /// Rebuild [builder] when any of [prefs] changes. Use when a widget's output

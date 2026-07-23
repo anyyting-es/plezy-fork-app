@@ -13,6 +13,8 @@ import '../mixins/refreshable.dart';
 import '../providers/multi_server_provider.dart';
 
 import '../anime/services/anilist_service.dart';
+import '../services/tmdb_service.dart';
+import '../widgets/settings_builder.dart';
 import '../utils/app_logger.dart';
 import '../utils/platform_detector.dart';
 import '../utils/snackbar_helper.dart';
@@ -111,11 +113,11 @@ class _SearchScreenState extends State<SearchScreen>
       if (!mounted) return;
       final multiServerProvider = context.read<MultiServerProvider>();
       final List<MediaItem> results;
-      if (multiServerProvider.hasConnectedServers) {
-        results = await multiServerProvider.aggregationService.searchAcrossServers(query);
-      } else {
+      if (context.isAnilist) {
         final animeResults = await AniListService.search(query);
         results = animeResults.map((a) => a.toMediaItem()).toList();
+      } else {
+        results = await TmdbService.search(query);
       }
 
       if (mounted) {

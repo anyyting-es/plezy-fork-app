@@ -8,15 +8,33 @@ class ExtensionPlugin {
   final String id;
   final String name;
   final String filename;
+  final String contentType;
 
-  ExtensionPlugin({required this.id, required this.name, required this.filename});
+  ExtensionPlugin({
+    required this.id,
+    required this.name,
+    required this.filename,
+    required this.contentType,
+  });
 
   factory ExtensionPlugin.fromJson(Map<String, dynamic> json) {
     return ExtensionPlugin(
       id: json['id']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
       filename: json['filename']?.toString() ?? '',
+      contentType: json['contentType']?.toString() ?? _deduceContentType(json['id']?.toString() ?? ''),
     );
+  }
+
+  static String _deduceContentType(String id) {
+    final idLower = id.toLowerCase();
+    if (idLower.contains('anime') || idLower.contains('tosho') || idLower.contains('neko') || idLower.contains('bt')) {
+      return 'anime';
+    }
+    if (idLower.contains('manga')) {
+      return 'manga';
+    }
+    return 'general';
   }
 }
 
@@ -79,14 +97,18 @@ class PluginExtensionsService {
     final settings = SettingsService.instance;
     final disabledList = settings.read(SettingsService.disabledExtensions);
 
-    // 2. Filter enabled online extensions
+    final activeType = settings.read(SettingsService.discoverContentType);
+    final String activeTypeStr = activeType == DiscoverContentType.anime ? 'anime' : 'general';
+
+    // 2. Filter enabled online extensions matching the active content type
     final onlineExtensions = list.where((ext) {
       if (disabledList.contains(ext.id)) return false;
-      return !(ext.id.contains('torrent') || ext.id.contains('tosho') || ext.id.contains('bt'));
+      if (ext.contentType != activeTypeStr) return false;
+      return !(ext.id.contains('torrent') || ext.id.contains('tosho') || ext.id.contains('bt') || ext.id.contains('torrentio'));
     }).toList();
 
     if (onlineExtensions.isEmpty) {
-      appLogger.w('[PluginExtensions] No enabled online extensions available to resolve stream.');
+      appLogger.w('[PluginExtensions] No enabled online extensions available for $activeTypeStr to resolve stream.');
       return null;
     }
 

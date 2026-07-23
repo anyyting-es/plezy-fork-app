@@ -21,6 +21,8 @@ import 'trackers/tracker_constants.dart';
 
 enum ThemeMode { system, light, dark, oled }
 
+enum DiscoverContentType { anime, general }
+
 /// Library density is now an int 1–5 (1 = most compact, 5 = most comfortable).
 /// Default is 3.
 class LibraryDensity {
@@ -337,6 +339,11 @@ class SettingsService extends BaseSharedPreferencesService {
   static const String defaultIntroPattern = r'(?:^|\b)(?:intro(?:duction)?|opening)(?:\b|$)|^op(?:\s?\d+)?$';
   static const String defaultCreditsPattern = r'(?:^|\b)(?:outro|closing|credits?|ending)(?:\b|$)|^ed(?:\s?\d+)?$';
 
+  static const discoverContentType = EnumPref<DiscoverContentType>(
+    'discover_content_type',
+    values: DiscoverContentType.values,
+    defaultValue: DiscoverContentType.anime,
+  );
   static const enableDebugLogging = BoolPref('enable_debug_logging', onWrite: setLoggerLevel);
   // Source URL for the Apple TV Atmos diagnostics screen; deliberately not
   // resettable so a tester keeps it across "Reset All Settings".

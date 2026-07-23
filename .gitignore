@@ -70,4 +70,6 @@ duplication-report/
 **/fastlane/report.xml
 maestro/**/*.png
 
-server/deploy.shseanime/
+server/deploy.sh
+seanime/
+

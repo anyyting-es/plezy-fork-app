@@ -44,6 +44,7 @@ import '../services/api_cache.dart';
 import '../services/multi_server_manager.dart';
 import '../services/offline_watch_sync_service.dart';
 import '../services/settings_service.dart';
+import '../services/trackers/anilist/anilist_tracker.dart';
 import '../providers/offline_mode_provider.dart';
 import '../services/companion_remote/companion_remote_host_controller.dart';
 import '../services/companion_remote/companion_remote_receiver.dart';
@@ -262,6 +263,15 @@ class _MainScreenState extends State<MainScreen>
   bool _startupServicesPrimed = false;
   Timer? _startupSettleTimeout;
 
+  LibrariesProvider? _librariesProvider;
+
+  void _onLibrariesChanged() {
+    setState(() {
+      _screens = _buildScreens(_isOffline);
+      _currentTab = _normalizeTabForMode(_currentTab, _isOffline);
+    });
+  }
+
   /// Hard ceiling on how long we wait for [ActiveProfileBinder] to settle
   /// before priming the UI anyway. The binder always calls
   /// `markBindingFinished` in its `finally`, but this is a defence in depth:
@@ -329,6 +339,8 @@ class _MainScreenState extends State<MainScreen>
       _activeProfileForListener = activeProfile;
       _lastSeenProfileId = activeProfile.activeId;
       activeProfile.addListener(_onActiveProfileChanged);
+      _librariesProvider = context.read<LibrariesProvider>();
+      _librariesProvider?.addListener(_onLibrariesChanged);
       _plexHomeService = context.read<PlexHomeService>();
       unawaited(_plexHomeService!.start());
       final manager = context.read<MultiServerProvider>().serverManager;
@@ -815,6 +827,7 @@ class _MainScreenState extends State<MainScreen>
     }
     _offlineModeProvider?.removeListener(_handleOfflineStatusChanged);
     _multiServerProvider?.removeListener(_handleLiveTvChanged);
+    _librariesProvider?.removeListener(_onLibrariesChanged);
     if (_bindingSettleListener != null) {
       _activeProfileForListener?.removeListener(_bindingSettleListener!);
     }
@@ -1499,7 +1512,10 @@ class _MainScreenState extends State<MainScreen>
   List<NavigationTab> _getVisibleTabs(bool isOffline) {
     final tabs = NavigationTab.getVisibleTabs(isOffline: isOffline, hasLiveTv: _hasLiveTv);
     final hasServers = context.read<MultiServerProvider>().serverManager.serverIds.isNotEmpty;
-    if (!hasServers) {
+    final isAnilistMode = SettingsService.instance.read(SettingsService.discoverContentType) == DiscoverContentType.anime;
+    final hasAnilist = AnilistTracker.instance.client != null;
+
+    if (!hasServers && !(isAnilistMode && hasAnilist)) {
       return tabs.where((tab) => tab.id != NavigationTabId.libraries && tab.id != NavigationTabId.liveTv).toList();
     }
     return tabs;

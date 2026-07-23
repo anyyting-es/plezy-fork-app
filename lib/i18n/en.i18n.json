@@ -86,6 +86,10 @@
   },
   "settings": {
     "title": "Settings",
+    "discoverContentType": "Home Content Catalog",
+    "discoverContentTypeDescription": "Select the content type shown on the Home screen",
+    "animeCatalog": "Anime (AniList)",
+    "generalCatalog": "Movies & TV Series (TMDB)",
     "supportDeveloper": "Support Plezy",
     "supportDeveloperDescription": "Donate via Liberapay to fund development",
     "language": "Language",
@@ -719,6 +723,13 @@
     "failedToRate": "Couldn't update rating"
   },
   "libraries": {
+    "anilist": {
+      "current": "Watching",
+      "planning": "Planning",
+      "completed": "Completed",
+      "paused": "Paused",
+      "dropped": "Dropped"
+    },
     "title": "Libraries",
     "fallbackTitle": "Library",
     "scanLibraryFiles": "Scan Library Files",

@@ -625,6 +625,7 @@ class _RatingBottomSheetState extends State<RatingBottomSheet> {
     MediaBackend.plex => 'Plex',
     MediaBackend.jellyfin => 'Jellyfin',
     MediaBackend.anilist => 'AniList',
+    MediaBackend.tmdb => 'TMDB',
   };
 }
 

@@ -16,7 +16,7 @@ class BackendBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (backend == MediaBackend.anilist) {
+    if (backend == MediaBackend.anilist || backend == MediaBackend.tmdb) {
       return const SizedBox.shrink();
     }
     final tint =
@@ -27,7 +27,7 @@ class BackendBadge extends StatelessWidget {
     final asset = switch (backend) {
       MediaBackend.plex => 'assets/plex_chevron.svg',
       MediaBackend.jellyfin => 'assets/jellyfin_icon.svg',
-      MediaBackend.anilist => throw UnimplementedError(),
+      MediaBackend.anilist || MediaBackend.tmdb => throw UnimplementedError(),
     };
     return SvgPicture.asset(
       asset,

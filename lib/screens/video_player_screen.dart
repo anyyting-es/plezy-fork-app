@@ -667,8 +667,8 @@ class VideoPlayerScreenState extends State<VideoPlayerScreen> with WidgetsBindin
         if (!mounted || player != currentPlayer) return;
       }
 
-      if (_currentMetadata.backend == MediaBackend.anilist && widget.directStreamUrl == null) {
-        throw StateError('Para reproducir contenido de AniList necesitas seleccionar una fuente de streaming.');
+      if ((_currentMetadata.isAnilist || _currentMetadata.isTmdb) && widget.directStreamUrl == null) {
+        throw StateError('Para reproducir este contenido necesitas seleccionar una fuente de streaming.');
       }
 
       // If direct stream URL is provided, mock the playback context to use this URL directly

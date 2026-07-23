@@ -252,6 +252,62 @@ sealed class MediaItem with _$MediaItem {
         backendFolderKey: backendFolderKey,
         raw: raw,
       ),
+      MediaBackend.tmdb => TmdbMediaItem(
+        id: id,
+        kind: kind,
+        guid: guid,
+        title: title,
+        titleSort: titleSort,
+        summary: summary,
+        tagline: tagline,
+        originalTitle: originalTitle,
+        studio: studio,
+        year: year,
+        originallyAvailableAt: originallyAvailableAt,
+        contentRating: contentRating,
+        parentId: parentId,
+        parentTitle: parentTitle,
+        parentThumbPath: parentThumbPath,
+        parentIndex: parentIndex,
+        index: index,
+        grandparentId: grandparentId,
+        grandparentTitle: grandparentTitle,
+        grandparentThumbPath: grandparentThumbPath,
+        grandparentArtPath: grandparentArtPath,
+        thumbPath: thumbPath,
+        artPath: artPath,
+        clearLogoPath: clearLogoPath,
+        backgroundSquarePath: backgroundSquarePath,
+        durationMs: durationMs,
+        viewOffsetMs: viewOffsetMs,
+        viewCount: viewCount,
+        lastViewedAt: lastViewedAt,
+        leafCount: leafCount,
+        viewedLeafCount: viewedLeafCount,
+        childCount: childCount,
+        addedAt: addedAt,
+        updatedAt: updatedAt,
+        rating: rating,
+        userRating: userRating,
+        genres: genres,
+        directors: directors,
+        writers: writers,
+        producers: producers,
+        countries: countries,
+        collections: collections,
+        labels: labels,
+        styles: styles,
+        moods: moods,
+        roles: roles,
+        mediaVersions: mediaVersions,
+        libraryId: libraryId,
+        libraryTitle: libraryTitle,
+        audioLanguage: audioLanguage,
+        serverId: serverId,
+        serverName: serverName,
+        backendFolderKey: backendFolderKey,
+        raw: raw,
+      ),
     };
   }
 
@@ -458,10 +514,71 @@ sealed class MediaItem with _$MediaItem {
     @JsonKey(fromJson: _mediaItemRawFromJson) Map<String, Object?>? raw,
   }) = AnilistMediaItem;
 
+  /// Backend-tagged concrete subclass for items sourced from TMDB.
+  @FreezedUnionValue('tmdb')
+  @JsonSerializable(includeIfNull: false, explicitToJson: true)
+  const factory MediaItem.tmdb({
+    @JsonKey(readValue: readStringField, defaultValue: '') required String id,
+    @JsonKey(fromJson: _mediaKindFromJson, toJson: _mediaKindToJson) required MediaKind kind,
+    String? guid,
+    String? title,
+    String? titleSort,
+    String? summary,
+    String? tagline,
+    String? originalTitle,
+    String? studio,
+    @JsonKey(fromJson: flexibleInt) int? year,
+    String? originallyAvailableAt,
+    String? contentRating,
+    String? parentId,
+    String? parentTitle,
+    String? parentThumbPath,
+    @JsonKey(fromJson: flexibleInt) int? parentIndex,
+    @JsonKey(fromJson: flexibleInt) int? index,
+    String? grandparentId,
+    String? grandparentTitle,
+    String? grandparentThumbPath,
+    String? grandparentArtPath,
+    String? thumbPath,
+    String? artPath,
+    String? clearLogoPath,
+    String? backgroundSquarePath,
+    @JsonKey(fromJson: flexibleInt) int? durationMs,
+    @JsonKey(fromJson: flexibleInt) int? viewOffsetMs,
+    @JsonKey(fromJson: flexibleInt) int? viewCount,
+    @JsonKey(fromJson: flexibleInt) int? lastViewedAt,
+    @JsonKey(fromJson: flexibleInt) int? leafCount,
+    @JsonKey(fromJson: flexibleInt) int? viewedLeafCount,
+    @JsonKey(fromJson: flexibleInt) int? childCount,
+    @JsonKey(fromJson: flexibleInt) int? addedAt,
+    @JsonKey(fromJson: flexibleInt) int? updatedAt,
+    @JsonKey(fromJson: flexibleDouble) double? rating,
+    @JsonKey(fromJson: flexibleDouble) double? userRating,
+    @JsonKey(fromJson: _mediaItemStringList) List<String>? genres,
+    @JsonKey(fromJson: _mediaItemStringList) List<String>? directors,
+    @JsonKey(fromJson: _mediaItemStringList) List<String>? writers,
+    @JsonKey(fromJson: _mediaItemStringList) List<String>? producers,
+    @JsonKey(fromJson: _mediaItemStringList) List<String>? countries,
+    @JsonKey(fromJson: _mediaItemStringList) List<String>? collections,
+    @JsonKey(fromJson: _mediaItemStringList) List<String>? labels,
+    @JsonKey(fromJson: _mediaItemStringList) List<String>? styles,
+    @JsonKey(fromJson: _mediaItemStringList) List<String>? moods,
+    @JsonKey(fromJson: _mediaItemRolesFromJson) List<MediaRole>? roles,
+    @JsonKey(fromJson: _mediaItemVersionsFromJson) List<MediaVersion>? mediaVersions,
+    String? libraryId,
+    String? libraryTitle,
+    String? audioLanguage,
+    String? serverId,
+    String? serverName,
+    String? backendFolderKey,
+    @JsonKey(fromJson: _mediaItemRawFromJson) Map<String, Object?>? raw,
+  }) = TmdbMediaItem;
+
   MediaBackend get backend => switch (this) {
     PlexMediaItem() => MediaBackend.plex,
     JellyfinMediaItem() => MediaBackend.jellyfin,
     AnilistMediaItem() => MediaBackend.anilist,
+    TmdbMediaItem() => MediaBackend.tmdb,
   };
 
   /// Restore a [MediaItem] from a [toJson] payload. Missing/unknown backend
@@ -472,6 +589,7 @@ sealed class MediaItem with _$MediaItem {
       MediaBackend.plex => _$PlexMediaItemFromJson(json),
       MediaBackend.jellyfin => _$JellyfinMediaItemFromJson(json),
       MediaBackend.anilist => _$AnilistMediaItemFromJson(json),
+      MediaBackend.tmdb => _$TmdbMediaItemFromJson(json),
     };
   }
 
@@ -480,6 +598,7 @@ sealed class MediaItem with _$MediaItem {
       final PlexMediaItem item => {'backend': MediaBackend.plex.id, ..._$PlexMediaItemToJson(item)},
       final JellyfinMediaItem item => {'backend': MediaBackend.jellyfin.id, ..._$JellyfinMediaItemToJson(item)},
       final AnilistMediaItem item => {'backend': MediaBackend.anilist.id, ..._$AnilistMediaItemToJson(item)},
+      final TmdbMediaItem item => {'backend': MediaBackend.tmdb.id, ..._$TmdbMediaItemToJson(item)},
     };
   }
 
@@ -557,10 +676,18 @@ sealed class MediaItem with _$MediaItem {
 
   /// Subtitle line shown below [displayTitle] for episodes/seasons.
   String? get displaySubtitle {
+    if (isAnilist && kind == MediaKind.episode) {
+      final epNum = index ?? (viewedLeafCount != null ? viewedLeafCount! + 1 : 1);
+      final epTitleText = (title != null && title!.isNotEmpty) ? ' • $title' : '';
+      return 'Ep. $epNum$epTitleText';
+    }
     if (kind == MediaKind.episode || kind == MediaKind.season) {
       if (grandparentTitle != null || (kind == MediaKind.season && parentTitle != null)) {
         return title;
       }
+    }
+    if (isAnilist && viewedLeafCount != null) {
+      return 'Ep. $viewedLeafCount';
     }
     return null;
   }
@@ -671,3 +798,8 @@ List<MediaVersion>? _mediaItemVersionsFromJson(Object? raw) {
 }
 
 Map<String, Object?>? _mediaItemRawFromJson(Object? raw) => raw is Map ? Map<String, Object?>.from(raw) : null;
+
+extension MediaItemBackendExtensions on MediaItem {
+  bool get isAnilist => backend == MediaBackend.anilist;
+  bool get isTmdb => backend == MediaBackend.tmdb;
+}

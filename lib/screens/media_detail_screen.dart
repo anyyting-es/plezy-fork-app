@@ -30,6 +30,7 @@ import '../media/media_item.dart';
 import '../media/episode_collection.dart';
 import '../media/media_item_types.dart';
 import '../anime/services/anizip_service.dart';
+import '../services/tmdb_service.dart';
 import '../media/media_kind.dart';
 import '../media/media_backend.dart';
 import '../media/media_role.dart';
@@ -1318,21 +1319,66 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
       // populates resume separately if needed.
       final client = getServerBoundMediaClient(context);
       if (client == null) {
-        // AniList items have no serverId — they are valid online items without a media server.
-        if (_metadata.backend == MediaBackend.anilist) {
+        // AniList or TMDB items have no serverId — they are valid online items without a media server.
+        if (_metadata.isAnilist || _metadata.isTmdb) {
           if (!mounted) return;
-          setState(() {
-            _fullMetadata = _metadata;
-            _isLoadingMetadata = false;
-            _hasLoadedExtras = true;
-            _hasLoadedRelatedHubs = true;
-          });
-          if (_metadata.isShow) {
-            unawaited(_loadSeasons());
-          } else if (_metadata.isSeason) {
-            _seasons = [_metadata];
-            _showEpisodesDirectly = true;
-            unawaited(_fetchAllEpisodes());
+          if (_metadata.isAnilist) {
+            setState(() {
+              _fullMetadata = _metadata;
+              _isLoadingMetadata = false;
+              _hasLoadedExtras = true;
+              _hasLoadedRelatedHubs = true;
+            });
+            if (_metadata.isShow) {
+              unawaited(_loadSeasons());
+            } else if (_metadata.isSeason) {
+              _seasons = [_metadata];
+              _showEpisodesDirectly = true;
+              unawaited(_fetchAllEpisodes());
+            }
+          } else if (_metadata.isTmdb) {
+            // Async load TMDB rich details (genres, taglines, backdrop, and external/IMDb ID)!
+            unawaited(() async {
+              try {
+                final full = await TmdbService.getDetails(_metadata.id, _metadata.kind);
+                if (mounted && full != null) {
+                  setState(() {
+                    _fullMetadata = full;
+                    _isLoadingMetadata = false;
+                    _hasLoadedExtras = true;
+                    _hasLoadedRelatedHubs = true;
+                  });
+                } else if (mounted) {
+                  setState(() {
+                    _fullMetadata = _metadata;
+                    _isLoadingMetadata = false;
+                    _hasLoadedExtras = true;
+                    _hasLoadedRelatedHubs = true;
+                  });
+                }
+              } catch (e) {
+                if (mounted) {
+                  setState(() {
+                    _fullMetadata = _metadata;
+                    _isLoadingMetadata = false;
+                    _hasLoadedExtras = true;
+                    _hasLoadedRelatedHubs = true;
+                  });
+                }
+              }
+              if (_metadata.isShow) {
+                unawaited(_loadSeasons());
+              } else if (_metadata.isSeason) {
+                _seasons = [_metadata];
+                _showEpisodesDirectly = true;
+                unawaited(_fetchAllEpisodes());
+              } else if (_metadata.isMovie) {
+                setStateIfMounted(() {
+                  _hasLoadedSeasons = true;
+                  _hasLoadedEpisodes = true;
+                });
+              }
+            }());
           }
           return;
         }
@@ -1423,7 +1469,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
     final client = serverId == null ? null : context.tryGetMediaClientForServer(ServerId(serverId));
 
     if (client == null) {
-      if (_metadata.backend == MediaBackend.anilist) {
+      if (_metadata.isAnilist) {
         try {
           List<MediaItem> animeSeasons;
           if (_metadata.id.startsWith('anime_')) {
@@ -1458,6 +1504,36 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
           }
         } catch (e, st) {
           appLogger.w('AniList Seasons load failed', error: e, stackTrace: st);
+          setStateIfMounted(() {
+            _isLoadingSeasons = false;
+            _seasonsLoadFailed = true;
+            _hasLoadedSeasons = true;
+          });
+        } finally {
+          if (!(_seasonsCompleter?.isCompleted ?? true)) {
+            _seasonsCompleter?.complete();
+          }
+        }
+        return;
+      } else if (_metadata.isTmdb) {
+        try {
+          final tmdbSeasons = await TmdbService.getSeasons(_metadata.id);
+          _updateSeasonTabFocusNodes(tmdbSeasons.length);
+          if (!mounted) return;
+          setState(() {
+            _seasons = tmdbSeasons;
+            _isLoadingSeasons = false;
+            _hasLoadedSeasons = true;
+            _showEpisodesDirectly = tmdbSeasons.length <= 1;
+            _selectedSeasonIndex = 0;
+          });
+
+          if (_showEpisodesDirectly) {
+            await _fetchAllEpisodes();
+            _ensureFallbackOnDeckEpisode();
+          }
+        } catch (e, st) {
+          appLogger.w('TMDB Seasons load failed', error: e, stackTrace: st);
           setStateIfMounted(() {
             _isLoadingSeasons = false;
             _seasonsLoadFailed = true;
@@ -1734,7 +1810,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
         // PlexClient helper returns null) loads episodes too.
         final mediaClient = _getMediaClientForMetadata(context);
         if (mediaClient == null) {
-          if (_metadata.backend == MediaBackend.anilist) {
+          if (_metadata.isAnilist) {
             List<MediaItem> animeEpisodes = const [];
             if (_metadata.id.startsWith('anime_')) {
               final animeId = int.parse(_metadata.id.substring('anime_'.length));
@@ -1759,6 +1835,19 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
               seasonId: seasonId,
               episodes: animeEpisodes,
               total: animeEpisodes.length,
+              generation: generation,
+            );
+            return;
+          } else if (_metadata.isTmdb) {
+            final tmdbEpisodes = await TmdbService.getSeasonEpisodes(
+              showId: _metadata.id,
+              seasonNumber: season.index ?? 1,
+            );
+            _completeSeasonEpisodesLoad(
+              seasonIndex: seasonIndex,
+              seasonId: seasonId,
+              episodes: tmdbEpisodes,
+              total: tmdbEpisodes.length,
               generation: generation,
             );
             return;
@@ -1822,7 +1911,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
     try {
       final mediaClient = _getMediaClientForMetadata(context);
       if (mediaClient == null) {
-        if (_metadata.backend == MediaBackend.anilist) {
+        if (_metadata.isAnilist) {
           List<MediaItem> animeEpisodes = const [];
           if (_metadata.id.startsWith('anime_')) {
             final animeId = int.parse(_metadata.id.substring('anime_'.length));
@@ -1849,6 +1938,23 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
             final current = _seasonEpisodePager.stateFor(seasonId);
             if (_seasonEpisodePager.hasState(seasonId) && !(current.isInitialLoading && !current.hasItems)) return;
             _seasonEpisodePager.completeFirstPage(seasonId, animeEpisodes, animeEpisodes.length);
+            if (_isSelectedSeason(seasonIndex, seasonId)) {
+              _episodes = List.of(_seasonEpisodePager.stateFor(seasonId).items);
+            }
+          });
+          return;
+        } else if (_metadata.isTmdb) {
+          final tmdbEpisodes = await TmdbService.getSeasonEpisodes(
+            showId: _metadata.id,
+            seasonNumber: season.index ?? 1,
+          );
+          if (!mounted || _showEpisodesDirectly || seasonIndex >= _seasons.length || _seasons[seasonIndex].id != seasonId) {
+            return;
+          }
+          setStateIfMounted(() {
+            final current = _seasonEpisodePager.stateFor(seasonId);
+            if (_seasonEpisodePager.hasState(seasonId) && !(current.isInitialLoading && !current.hasItems)) return;
+            _seasonEpisodePager.completeFirstPage(seasonId, tmdbEpisodes, tmdbEpisodes.length);
             if (_isSelectedSeason(seasonIndex, seasonId)) {
               _episodes = List.of(_seasonEpisodePager.stateFor(seasonId).items);
             }
@@ -2048,7 +2154,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
     try {
       List<MediaHub> relatedHubs = [];
       
-      if (_metadata.backend == MediaBackend.anilist) {
+      if (_metadata.isAnilist || _metadata.isTmdb) {
         relatedHubs = const [];
       } else {
         final serverId = _metadata.serverId;
@@ -2873,7 +2979,7 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
     final serverId = _metadata.serverId;
     final client = serverId == null ? null : context.tryGetMediaClientForServer(ServerId(serverId));
     if (client == null) {
-      if (_metadata.backend == MediaBackend.anilist && _seasons.isNotEmpty) {
+      if (_metadata.isAnilist && _seasons.isNotEmpty) {
         try {
           List<MediaItem> animeEpisodes = const [];
           if (_metadata.id.startsWith('anime_')) {
@@ -2903,6 +3009,23 @@ class _MediaDetailScreenState extends State<MediaDetailScreen>
           return;
         } catch (e) {
           appLogger.e('Failed to load AniList/AniZip episodes', error: e);
+        }
+      } else if (_metadata.isTmdb && _seasons.isNotEmpty) {
+        try {
+          final selectedSeason = _seasons[_selectedSeasonIndex];
+          final tmdbEpisodes = await TmdbService.getSeasonEpisodes(
+            showId: _metadata.id,
+            seasonNumber: selectedSeason.index ?? 1,
+          );
+          if (mounted) {
+            setState(() {
+              _episodes = tmdbEpisodes;
+              _hasLoadedEpisodes = true;
+            });
+          }
+          return;
+        } catch (e) {
+          appLogger.e('Failed to load TMDB episodes', error: e);
         }
       }
       return;

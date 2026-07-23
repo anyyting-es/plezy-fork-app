@@ -49,7 +49,7 @@ import 'providers/download_provider.dart';
 import 'providers/offline_mode_provider.dart';
 import 'providers/offline_watch_provider.dart';
 import 'providers/shader_provider.dart';
-import 'anime/providers/anime_provider.dart';
+import 'providers/catalog_provider.dart';
 import 'utils/snackbar_helper.dart';
 import 'services/multi_server_manager.dart';
 import 'services/offline_watch_sync_service.dart';
@@ -722,8 +722,8 @@ class _MainAppState extends State<MainApp> with WidgetsBindingObserver {
             return provider;
           },
         ),
-        ChangeNotifierProvider<AnimeProvider>(
-          create: (_) => AnimeProvider(),
+        ChangeNotifierProvider<CatalogProvider>(
+          create: (_) => CatalogProvider(),
         ),
         ChangeNotifierProvider(
           create: (context) {

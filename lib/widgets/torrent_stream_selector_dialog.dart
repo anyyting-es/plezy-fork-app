@@ -8,6 +8,7 @@ import '../media/media_kind.dart';
 import '../services/torrent_playback_service.dart';
 import '../anime/services/anizip_service.dart';
 import '../services/plugin_extensions_service.dart';
+import '../services/stremio_torrentio_service.dart';
 import '../services/settings_service.dart';
 import '../services/torrent_engine_service.dart';
 import '../utils/app_logger.dart';
@@ -197,12 +198,18 @@ class _ExtensionSourceSelectorDialogState extends State<ExtensionSourceSelectorD
       // Filter out disabled extensions
       final enabledExtensions = list.where((ext) => !disabledList.contains(ext.id)).toList();
 
+      final isAnime = widget.metadata.isAnilist;
+      final isTmdb = widget.metadata.isTmdb;
+      final targetType = isAnime ? 'anime' : 'general';
+
+      final extensionsForType = enabledExtensions.where((ext) => ext.contentType == targetType).toList();
+
       // Group by category (online vs torrent)
-      _onlineExtensions = enabledExtensions.where((ext) {
+      _onlineExtensions = extensionsForType.where((ext) {
         return !(ext.id.contains('torrent') || ext.id.contains('tosho') || ext.id.contains('bt'));
       }).toList();
 
-      _torrentExtensions = enabledExtensions.where((ext) {
+      _torrentExtensions = extensionsForType.where((ext) {
         return ext.id.contains('torrent') || ext.id.contains('tosho') || ext.id.contains('bt');
       }).toList();
 
@@ -294,7 +301,35 @@ class _ExtensionSourceSelectorDialogState extends State<ExtensionSourceSelectorD
       final isMovie = widget.metadata.kind == MediaKind.movie;
       final title = widget.metadata.grandparentTitle ?? widget.metadata.title ?? '';
       final epNum = widget.episodeNumber ?? 1;
+
       List<dynamic>? results;
+
+      final imdbId = widget.imdbId;
+      if (imdbId.isNotEmpty) {
+        try {
+          if (isMovie) {
+            final args = [
+              {"imdbId": imdbId},
+              {"useTorrent": false}
+            ];
+            results = await PluginExtensionsService.callMethod(
+              providerId: providerId,
+              method: 'movie',
+              args: args,
+            );
+          } else {
+            final args = [
+              {"imdbId": imdbId, "episode": epNum, "season": widget.seasonNumber ?? 1},
+              {"useTorrent": false}
+            ];
+            results = await PluginExtensionsService.callMethod(
+              providerId: providerId,
+              method: 'batch',
+              args: args,
+            );
+          }
+        } catch (_) {}
+      }
 
       int? anilistId;
       if (widget.metadata.grandparentId != null) {

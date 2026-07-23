@@ -20,7 +20,9 @@ import 'app_logger.dart';
 import 'platform_detector.dart';
 import '../media/media_backend.dart';
 import '../widgets/torrent_stream_selector_dialog.dart';
+import '../media/media_kind.dart';
 import '../services/plugin_extensions_service.dart';
+import '../services/tmdb_service.dart';
 
 const String kVideoPlayerRouteName = '/video_player';
 
@@ -159,24 +161,25 @@ Future<bool?> navigateToVideoPlayer(
 
   appLogger.i('[PlaybackNavigation] Launching player for item ${metadata.id} ("${metadata.title}", index=${metadata.index}, grandparent="${metadata.grandparentTitle}") - backend=${metadata.backend}');
 
-  if (metadata.backend == MediaBackend.anilist && directStreamUrl == null) {
-    final autoSelect = SettingsService.instance.read(SettingsService.autoSelectExtensionStream);
-
-    if (autoSelect) {
-      try {
-        final episodeNum = metadata.index ?? 1;
-        final animeTitle = metadata.grandparentTitle ?? metadata.title ?? '';
-        if (animeTitle.isNotEmpty) {
-          final stream = await PluginExtensionsService.getOnlineStreamUrl(
-            title: animeTitle,
-            episodeNumber: episodeNum,
-          );
-          if (stream != null && stream.isNotEmpty) {
-            directStreamUrl = stream;
+  if ((metadata.isAnilist || metadata.isTmdb) && directStreamUrl == null) {
+    if (metadata.isAnilist) {
+      final autoSelect = SettingsService.instance.read(SettingsService.autoSelectExtensionStream);
+      if (autoSelect) {
+        try {
+          final episodeNum = metadata.index ?? 1;
+          final animeTitle = metadata.grandparentTitle ?? metadata.title ?? '';
+          if (animeTitle.isNotEmpty) {
+            final stream = await PluginExtensionsService.getOnlineStreamUrl(
+              title: animeTitle,
+              episodeNumber: episodeNum,
+            );
+            if (stream != null && stream.isNotEmpty) {
+              directStreamUrl = stream;
+            }
           }
+        } catch (e, st) {
+          appLogger.e('[PlaybackNavigation] Failed to resolve online stream from extensions', error: e, stackTrace: st);
         }
-      } catch (e, st) {
-        appLogger.e('[PlaybackNavigation] Failed to resolve online stream from extensions', error: e, stackTrace: st);
       }
     }
 
@@ -185,6 +188,20 @@ Future<bool?> navigateToVideoPlayer(
         String? imdbId;
         if (metadata.guid != null && metadata.guid!.startsWith('imdb://')) {
           imdbId = metadata.guid!.replaceAll('imdb://', '');
+        } else if (metadata.isTmdb) {
+          if (metadata.grandparentId != null) {
+            // TMDB episodes do not hold the IMDb ID directly, so we load the TV show's details
+            final showDetails = await TmdbService.getDetails(metadata.grandparentId!, MediaKind.show);
+            if (showDetails != null && showDetails.guid != null && showDetails.guid!.startsWith('imdb://')) {
+              imdbId = showDetails.guid!.replaceAll('imdb://', '');
+            }
+          } else {
+            // It's a Movie, load movie details to get the IMDb ID if missing
+            final movieDetails = await TmdbService.getDetails(metadata.id, MediaKind.movie);
+            if (movieDetails != null && movieDetails.guid != null && movieDetails.guid!.startsWith('imdb://')) {
+              imdbId = movieDetails.guid!.replaceAll('imdb://', '');
+            }
+          }
         }
         if (context.mounted) {
           final streamUrl = await ExtensionSourceSelectorDialog.show(
@@ -198,7 +215,7 @@ Future<bool?> navigateToVideoPlayer(
           directStreamUrl = streamUrl;
         }
       } catch (e, st) {
-        appLogger.e('[TorrentNavigation] Failed to resolve AniList stream details', error: e, stackTrace: st);
+        appLogger.e('[TorrentNavigation] Failed to resolve stream details', error: e, stackTrace: st);
         return null;
       }
     }
